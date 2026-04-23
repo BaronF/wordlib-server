@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据治理交付件规范检查</title>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{--p:#1a56a0;--p2:#0d3b6e;--s:#67c23a;--w:#e6a23c;--d:#f56c6c;--bg:#f5f6f8;--card:#fff;--border:#e4e7ed;--text:#303133;--text2:#606266;--text3:#909399;--radius:10px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:24px 0;text-align:center}
+.header h1{font-size:22px;font-weight:700;margin-bottom:4px}
+.header h1 em{font-style:normal;color:#e8730c}
+.header p{font-size:13px;opacity:.6}
+.container{max-width:1200px;margin:0 auto;padding:24px 20px}
+.upload-zone{background:var(--card);border:2px dashed var(--border);border-radius:var(--radius);padding:40px;text-align:center;cursor:pointer;transition:all .25s;margin-bottom:20px}
+.upload-zone:hover{border-color:var(--p);background:#f0f5ff}
+.upload-zone .icon{font-size:40px;margin-bottom:10px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px}
+.stat{background:var(--card);border-radius:8px;padding:14px;text-align:center;border:1px solid var(--border)}
+.stat .val{font-size:22px;font-weight:700}.stat .label{font-size:11px;color:var(--text3);margin-top:2px}
+.section{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);margin-bottom:14px;overflow:hidden}
+.section-hd{padding:12px 16px;border-bottom:1px solid var(--border);font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;background:#fafafa;cursor:pointer;user-select:none}
+.section-hd:hover{background:#f0f0f0}
+.section-hd .badge{background:var(--d);color:#fff;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700}
+.section-hd .ok{background:var(--s)}
+.section-bd{max-height:300px;overflow-y:auto;padding:0;transition:max-height .3s}
+.section-bd.collapsed{max-height:0;overflow:hidden}
+.issue-item{padding:6px 16px;font-size:12px;color:var(--text2);border-bottom:1px solid #fafafa;line-height:1.6}
+.issue-item:last-child{border-bottom:none}
+.issue-item code{background:#f0f0f0;padding:1px 5px;border-radius:3px;font-size:11px;color:var(--p2);font-family:monospace}
+.issue-item b{color:var(--p)}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:8px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:8px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .2s;font-family:inherit}
+.btn:hover{border-color:var(--p);color:var(--p)}
+.btn-p{background:var(--p);color:#fff;border-color:var(--p)}.btn-p:hover{background:var(--p2)}
+.loading{text-align:center;padding:48px;color:var(--text3)}
+.loading .spin{display:inline-block;font-size:32px;animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.sheet-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.sheet-tab{padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:var(--card);transition:all .15s;display:flex;align-items:center;gap:4px}
+.sheet-tab:hover{border-color:var(--p);color:var(--p)}
+.sheet-tab.on{background:var(--p);color:#fff;border-color:var(--p)}
+.sheet-tab .cnt{font-weight:700}
+.sheet-tab .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot-ok{background:var(--s)}.dot-warn{background:var(--w)}.dot-err{background:var(--d)}
+.empty{text-align:center;padding:20px;color:var(--text3);font-size:13px}
+</style>
+</head>
+<body>
+<div class="header" style="display:none">
+  <h1>📋 数据治理<em>交付件</em>规范检查</h1>
+  <p>上传数据治理细部设计文档(.xlsx)，自动检查各 Sheet 页的规范性</p>
+</div>
+<div class="container" id="app"></div>
+</body>
+</html>
+<script>
+var state = {sheets:{}, issues:{}, summary:{}, files:[], history:JSON.parse(localStorage.getItem('gov_history')||'[]')};
+
+function render(){
+  document.getElementById('app').innerHTML =
+    '<div class="upload-zone" onclick="document.getElementById(\'fi\').click()">' +
+      '<div class="icon">📊</div><h3>点击上传数据治理细部设计文档</h3>' +
+      '<p>支持 .xlsx 格式，可同时选择多个文件进行交叉检查</p>' +
+      '<input type="file" id="fi" accept=".xlsx" multiple style="display:none" onchange="onFiles(this.files)">' +
+    '</div>' +
+    (state.history.length ? '<div style="margin-top:16px"><h3 style="font-size:14px;margin-bottom:8px;color:var(--text2)">📋 历史检查记录</h3><table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--card);border-radius:8px;overflow:hidden"><thead><tr style="background:#fafafa"><th style="padding:8px;text-align:left;border-bottom:1px solid var(--border)">文件</th><th style="padding:8px;border-bottom:1px solid var(--border)">Sheet数</th><th style="padding:8px;border-bottom:1px solid var(--border)">问题数</th><th style="padding:8px;border-bottom:1px solid var(--border)">时间</th></tr></thead><tbody>'+
+    state.history.map(function(h,i){return '<tr style="cursor:pointer;border-bottom:1px solid #f5f5f5" onclick="loadHist('+i+')" onmouseover="this.style.background=\'#f0f5ff\'" onmouseout="this.style.background=\'\'"><td style="padding:6px 8px;color:var(--p)">'+h.name+'</td><td style="padding:6px 8px;text-align:center;font-weight:600">'+h.sheetCount+'</td><td style="padding:6px 8px;text-align:center;font-weight:600;color:var(--d)">'+h.issueCount+'</td><td style="padding:6px 8px;color:var(--text3)">'+h.time+'</td></tr>'}).join('')+
+    '</tbody></table></div>' : '');
+}
+function loadHist(i){var h=state.history[i];if(h&&h.data){Object.assign(state,h.data);renderResult()}}
+
+document.addEventListener('DOMContentLoaded',function(){
+  render();
+  document.addEventListener('dragover',function(e){e.preventDefault()});
+  document.addEventListener('drop',function(e){e.preventDefault();if(e.dataTransfer.files.length)onFiles(e.dataTransfer.files)});
+});
+
+// ========== Excel 公式求值器 ==========
+function applyFormulas(fmap, data, ws) {
+  var resolved = 0;
+  for (var ref in fmap) {
+    var m = ref.match(/^([A-Z]+)(\d+)$/);
+    if (!m) continue;
+    var col = 0;
+    for (var i = 0; i < m[1].length; i++) col = col * 26 + (m[1].charCodeAt(i) - 64);
+    col -= 1;
+    var row = parseInt(m[2]) - 1;
+    if (!data[row]) continue;
+    var result = evalFormula(fmap[ref], data);
+    if (result !== null && result !== '') {
+      data[row][col] = result;
+      resolved++;
+    }
+  }
+  if (resolved > 0) console.log('[公式求值] 从XML提取并求值 ' + resolved + ' 个公式');
+}
+
+function resolveFormulas(ws, data) {
+  var resolved = 0;
+  // 扫描 ws 中所有含公式的单元格，直接求值写入 data
+  for (var cellRef in ws) {
+    if (cellRef[0] === '!') continue;
+    var cell = ws[cellRef];
+    if (!cell || !cell.f) continue;
+    var m = cellRef.match(/^([A-Z]+)(\d+)$/);
+    if (!m) continue;
+    var col = 0;
+    for (var i = 0; i < m[1].length; i++) col = col * 26 + (m[1].charCodeAt(i) - 64);
+    col -= 1;
+    var row = parseInt(m[2]) - 1;
+    if (!data[row]) continue;
+    // 不管有没有缓存值，都尝试求值（因为缓存值可能不准）
+    var result = evalFormulaWs(cell.f, ws, data);
+    if (result !== null && result !== '') {
+      data[row][col] = result;
+      resolved++;
+    }
+  }
+  // 再扫描 data 中以 = 开头的值
+  for (var r = 0; r < data.length; r++) {
+    if (!data[r]) continue;
+    for (var c = 0; c < data[r].length; c++) {
+      var val = String(data[r][c] || '');
+      if (val.charAt(0) === '=') {
+        var result = evalFormula(val.substring(1), data);
+        if (result !== null) { data[r][c] = result; resolved++; }
+      }
+    }
+  }
+  if (resolved > 0) console.log('[公式求值] 共求值 ' + resolved + ' 个公式单元格');
+}
+
+function evalFormulaWs(formula, ws, data) {
+  try {
+    var f = formula.trim();
+    // CONCAT / CONCATENATE
+    var cm = f.match(/^(?:CONCAT|CONCATENATE)\((.+)\)$/i);
+    if (cm) {
+      var args = splitArgs(cm[1]);
+      var result = '';
+      for (var i = 0; i < args.length; i++) {
+        var a = args[i].trim();
+        if (a[0] === '"' && a[a.length-1] === '"') result += a.slice(1,-1);
+        else if (/^[A-Z]+\d+$/i.test(a)) result += getVal(a.toUpperCase(), ws, data);
+        else result += a;
+      }
+      return result;
+    }
+    // & 拼接
+    if (f.indexOf('&') >= 0) {
+      var parts = f.split('&');
+      var result = '';
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i].trim();
+        if (p[0] === '"' && p[p.length-1] === '"') result += p.slice(1,-1);
+        else if (/^[A-Z]+\d+$/i.test(p)) result += getVal(p.toUpperCase(), ws, data);
+        else result += p;
+      }
+      return result;
+    }
+    // 单元格引用
+    if (/^[A-Z]+\d+$/i.test(f)) return getVal(f.toUpperCase(), ws, data);
+    return null;
+  } catch(e) { return null; }
+}
+
+function evalFormula(formula, data) {
+  try {
+    var f = formula.trim();
+    // CONCAT / CONCATENATE
+    var cm = f.match(/^(?:CONCAT|CONCATENATE)\((.+)\)$/i);
+    if (cm) {
+      var args = splitArgs(cm[1]);
+      var result = '';
+      for (var i = 0; i < args.length; i++) {
+        var a = args[i].trim();
+        if (a[0] === '"' && a[a.length-1] === '"') result += a.slice(1,-1);
+        else if (/^[A-Z]+\d+$/i.test(a)) result += getValFromData(a.toUpperCase(), data);
+        else result += a;
+      }
+      return result;
+    }
+    // & 拼接
+    if (f.indexOf('&') >= 0) {
+      var parts = f.split('&');
+      var result = '';
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i].trim();
+        if (p[0] === '"' && p[p.length-1] === '"') result += p.slice(1,-1);
+        else if (/^[A-Z]+\d+$/i.test(p)) result += getValFromData(p.toUpperCase(), data);
+        else result += p;
+      }
+      return result;
+    }
+    if (/^[A-Z]+\d+$/i.test(f)) return getValFromData(f.toUpperCase(), data);
+    return null;
+  } catch(e) { return null; }
+}
+
+function getVal(ref, ws, data) {
+  // 先从 ws 取
+  var cell = ws[ref];
+  if (cell) {
+    if (cell.w) return cell.w;
+    if (cell.v !== undefined && cell.v !== null && cell.v !== '') return String(cell.v);
+    if (cell.f) return evalFormulaWs(cell.f, ws, data) || '';
+  }
+  // 再从 data 取
+  return getValFromData(ref, data);
+}
+
+function getValFromData(ref, data) {
+  var m = ref.match(/^([A-Z]+)(\d+)$/);
+  if (!m) return '';
+  var col = 0;
+  for (var i = 0; i < m[1].length; i++) col = col * 26 + (m[1].charCodeAt(i) - 64);
+  col -= 1;
+  var row = parseInt(m[2]) - 1;
+  if (!data[row]) return '';
+  var val = String(data[row][col] || '');
+  // 如果取到的还是公式，递归求值
+  if (val.charAt(0) === '=') {
+    var result = evalFormula(val.substring(1), data);
+    return result !== null ? result : '';
+  }
+  return val;
+}
+
+function splitArgs(s) {
+  var args = [], cur = '', inQ = false;
+  for (var i = 0; i < s.length; i++) {
+    if (s[i] === '"') inQ = !inQ;
+    if (s[i] === ',' && !inQ) { args.push(cur); cur = ''; }
+    else cur += s[i];
+  }
+  if (cur) args.push(cur);
+  return args;
+}
+
+function onFiles(files){
+  if(!files||!files.length)return;
+  var list=Array.prototype.slice.call(files);
+  state.files=list.map(function(f){return f.name});
+  document.getElementById('app').innerHTML='<div class="loading"><div class="spin">⏳</div><div style="margin-top:12px">正在解析 '+list.length+' 个文件...</div></div>';
+  var allSheets={},pending=list.length;
+
+  function oneDone(){
+    pending--;
+    if(pending<=0){state.sheets=allSheets;runChecks();renderResult();saveHistory()}
+  }
+
+  list.forEach(function(file){
+    var reader=new FileReader();
+    reader.onload=function(e){
+      var buf = e.target.result;
+      var src = file.name.replace(/\.xlsx$/i,'');
+      // 第一步：用 JSZip 提取所有公式
+      JSZip.loadAsync(buf).then(function(zip){
+        var formulaMap = {};
+        var sheetFiles = [];
+        zip.forEach(function(path){ if(/^xl\/worksheets\/sheet\d+\.xml$/.test(path)) sheetFiles.push(path) });
+        if(sheetFiles.length===0){ parseWithFormulas(buf,src,formulaMap,allSheets); oneDone(); return; }
+        var p2 = sheetFiles.length;
+        sheetFiles.forEach(function(sf){
+          zip.file(sf).async('string').then(function(xml){
+            try{
+              var doc = new DOMParser().parseFromString(xml,'text/xml');
+              var nsS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+              var rowEls = doc.getElementsByTagNameNS(nsS,'row');
+              for(var ri=0;ri<rowEls.length;ri++){
+                var cellEls = rowEls[ri].getElementsByTagNameNS(nsS,'c');
+                for(var ci=0;ci<cellEls.length;ci++){
+                  var ref = cellEls[ci].getAttribute('r');
+                  var fEl = cellEls[ci].getElementsByTagNameNS(nsS,'f')[0];
+                  if(fEl && fEl.textContent){
+                    if(!formulaMap[sf]) formulaMap[sf]={};
+                    formulaMap[sf][ref] = fEl.textContent;
+                  }
+                }
+              }
+            }catch(ex){}
+            p2--;
+            if(p2<=0){ parseWithFormulas(buf,src,formulaMap,allSheets); oneDone(); }
+          });
+        });
+      }).catch(function(){ parseWithFormulas(buf,src,{},allSheets); oneDone(); });
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function parseWithFormulas(buf, src, formulaMap, allSheets){
+  var wb = XLSX.read(buf, {type:'array'});
+  wb.SheetNames.forEach(function(name, idx){
+    var ws = wb.Sheets[name];
+    var data = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:false});
+    var sfKey = 'xl/worksheets/sheet'+(idx+1)+'.xml';
+    var fmap = formulaMap[sfKey] || {};
+    applyFormulas(fmap, data, ws);
+    // 统一 sheet 名（去掉多余空格，避免同名 sheet 被拆成两个）
+    var normName = name.replace(/\s+/g,' ').trim();
+    if(!allSheets[normName]) allSheets[normName]=[];
+    allSheets[normName].push({src:src, data:data, name:normName});
+  });
+}
+</script>
+<script>
+// ========== 校验引擎 ==========
+// 辅助：判断一行是否有实际数据（跳过全空行）
+function rowHasData(row){
+  if(!row)return false;
+  for(var i=0;i<row.length;i++){if(String(row[i]||'').trim())return true}
+  return false;
+}
+
+function runChecks(){
+  state.issues={};
+  var S=state.sheets;
+  // 收集跨 sheet 数据
+  var l4Names={},l5Fields={},stdCodes={},odsTables={},dwiTables={};
+
+  // 01 L1-L3 资产目录（自动检测列位置，支持不同文档列数不同）
+  checkSheet(S,'01 L1-L3资产目录',function(rows,src){
+    var issues=[];
+    if(rows.length<2){issues.push('⚠️ Sheet 为空');return issues}
+    // 自动检测表头列
+    var hdr=rows[0],colL1=-1,colL2=-1,colL3cn=-1,colL3en=-1,colAbbr=-1;
+    for(var c=0;c<hdr.length;c++){
+      var h=String(hdr[c]||'');
+      if(h.indexOf('业务域')>=0&&h.indexOf('L1')>=0&&colL1<0) colL1=c;
+      else if(h.indexOf('主题域')>=0&&h.indexOf('L2')>=0&&h.indexOf('定义')<0&&h.indexOf('编码')<0&&colL2<0) colL2=c;
+      else if(h.indexOf('业务对象中文')>=0||h.indexOf('L3')>=0&&h.indexOf('中文')>=0) {if(colL3cn<0)colL3cn=c}
+      else if(h.indexOf('业务对象英文')>=0&&h.indexOf('缩写')<0) {if(colL3en<0)colL3en=c}
+      else if(h.indexOf('缩写')>=0) {if(colAbbr<0)colAbbr=c}
+    }
+    var l3Ens={},l3Abbrs={},lastL1='',lastL2='';
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];
+      if(!rowHasData(row))continue;
+      var rn=r+1;
+      var l1=colL1>=0?String(row[colL1]||'').trim():'';
+      var l2=colL2>=0?String(row[colL2]||'').trim():'';
+      if(l1)lastL1=l1; else l1=lastL1;
+      if(l2)lastL2=l2; else l2=lastL2;
+      var l3cn=colL3cn>=0?String(row[colL3cn]||'').trim():'';
+      var l3en=colL3en>=0?String(row[colL3en]||'').trim():'';
+      var abbr=colAbbr>=0?String(row[colAbbr]||'').trim():'';
+      if(!l3cn&&!l3en)continue;
+      if(!l3cn)issues.push('行'+rn+': <b>['+src+']</b> L3中文名为空，英文: <code>'+l3en+'</code>');
+      if(l3en){if(l3Ens[l3en.toLowerCase()])issues.push('行'+rn+': <b>['+src+']</b> L3英文名 <code>'+l3en+'</code> 重复');else l3Ens[l3en.toLowerCase()]=rn}
+      if(abbr){if(l3Abbrs[abbr.toLowerCase()])issues.push('行'+rn+': <b>['+src+']</b> L3缩写 <code>'+abbr+'</code> 重复');else l3Abbrs[abbr.toLowerCase()]=rn}
+      if(abbr&&!/^[A-Za-z][A-Za-z0-9_ \-]*$/.test(abbr))issues.push('行'+rn+': <b>['+src+']</b> L3缩写 <code>'+abbr+'</code> 含非法字符');
+    }
+    return issues;
+  });
+
+  // 02 L1-L5 数据资产：先收集所有文档的 J/K 列数据，最后统一做跨文档合并比对
+  var allL5en2cn={}, allL5cn2en={}; // 跨文档合并
+  checkSheet(S,'02 L1-L5数据资产',function(rows,src){
+    var issues=[];
+    if(rows.length<2)return['⚠️ Sheet 为空'];
+    var lastL4en='',lastSrcTbl=''; // 合并单元格继承
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];
+      if(!rowHasData(row))continue;
+      var rn=r+1;
+      var l4en=String(row[4]||'').trim();
+      var l4cn=String(row[5]||'').trim();
+      if(l4en)lastL4en=l4en; else l4en=lastL4en; // 合并单元格继承
+      var l5en=String(row[9]||'').trim(),l5cn=String(row[10]||'').trim();
+      if(l4en)l4Names[l4en.toLowerCase()]=1;
+      // 同时收集 G 列（源系统表名）用于模糊匹配，合并单元格继承
+      var srcTblName=String(row[6]||'').trim();
+      if(srcTblName)lastSrcTbl=srcTblName; else srcTblName=lastSrcTbl;
+      if(srcTblName)l4Names[srcTblName.toLowerCase()]=1;
+      if(!l5en&&!l5cn)continue;
+      if(!l5en)issues.push('行'+rn+': <b>['+src+']</b> L5英文(J列)为空，中文: '+l5cn+'，表: '+(l4cn||l4en));
+      if(!l5cn&&l5en.toLowerCase()!=='id')issues.push('行'+rn+': <b>['+src+']</b> L5中文(K列)为空，英文: <code>'+l5en+'</code>，表: '+(l4cn||l4en));
+      // 收集到跨文档合并池
+      if(l5en&&l5cn){
+        if(!allL5en2cn[l5en])allL5en2cn[l5en]={};
+        if(!allL5en2cn[l5en][l5cn])allL5en2cn[l5en][l5cn]=[];
+        allL5en2cn[l5en][l5cn].push(src);
+        if(!allL5cn2en[l5cn])allL5cn2en[l5cn]={};
+        if(!allL5cn2en[l5cn][l5en])allL5cn2en[l5cn][l5en]=[];
+        allL5cn2en[l5cn][l5en].push(src);
+      }
+    }
+    return issues;
+  });
+  // 跨文档合并的一词多义/一义多词（放到 02 sheet 的 issues 里）
+  var l5Issues=[];
+  for(var en in allL5en2cn){
+    if(Object.keys(allL5en2cn[en]).length>1){
+      var detail=Object.keys(allL5en2cn[en]).map(function(cn){
+        var srcs=allL5en2cn[en][cn];
+        var uniq={};srcs.forEach(function(s){uniq[s]=1});
+        return cn+'(来源:'+Object.keys(uniq).join(',')+')';
+      });
+      l5Issues.push('一词多义(J列): <code>'+en+'</code> → '+detail.join(' / '));
+    }
+  }
+  for(var cn in allL5cn2en){
+    if(Object.keys(allL5cn2en[cn]).length>1){
+      var detail=Object.keys(allL5cn2en[cn]).map(function(en){
+        var srcs=allL5cn2en[cn][en];
+        var uniq={};srcs.forEach(function(s){uniq[s]=1});
+        return '<code>'+en+'</code>(来源:'+Object.keys(uniq).join(',')+')';
+      });
+      l5Issues.push('一义多词(K列): '+cn+' → '+detail.join(' / '));
+    }
+  }
+  // 追加到 02 sheet 的 issues
+  for(var sheetName in state.issues){
+    if(sheetName.indexOf('02 L1-L5')>=0){
+      state.issues[sheetName]=state.issues[sheetName].concat(l5Issues);
+      break;
+    }
+  }
+
+  // 03 数据标准清单
+  checkSheet(S,'03 数据标准清单',function(rows,src){
+    var issues=[];
+    if(rows.length<2)return['⚠️ Sheet 为空'];
+    var codes={};
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];
+      if(!rowHasData(row))continue;
+      var rn=r+1;
+      var name=String(row[2]||'').trim(),code=String(row[3]||'').trim(),domain=String(row[4]||'').trim();
+      var dtype=String(row[10]||'').trim(),dlen=String(row[11]||'').trim();
+      if(!name)issues.push('行'+rn+': <b>['+src+']</b> 标准名称为空');
+      if(!code)issues.push('行'+rn+': <b>['+src+']</b> 标准编码为空');
+      if(code){
+        if(codes[code])issues.push('行'+rn+': <b>['+src+']</b> 标准编码 <code>'+code+'</code> 重复');
+        else codes[code]=rn;
+        stdCodes[code]=1;
+        if(!/^DST_/.test(code))issues.push('行'+rn+': <b>['+src+']</b> 标准编码 <code>'+code+'</code> 不符合 DST_ 前缀规范');
+      }
+      if(!domain)issues.push('行'+rn+': <b>['+src+']</b> 业务域为空');
+      if(dtype==='VARCHAR'&&(!dlen||dlen==='0'))issues.push('行'+rn+': <b>['+src+']</b> 标准 <code>'+name+'</code> 类型VARCHAR未指定长度');
+    }
+    return issues;
+  });
+
+  // 04 质量规则清单
+  checkSheet(S,'04 质量规则清单',function(rows,src){
+    var issues=[];
+    if(rows.length<2)return['⚠️ Sheet 为空'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];
+      if(!rowHasData(row))continue;
+      var rn=r+1;
+      var name=String(row[1]||'').trim(),tbl=String(row[2]||'').trim(),expr=String(row[9]||'').trim();
+      var std=String(row[5]||'').trim();
+      if(!name)issues.push('行'+rn+': <b>['+src+']</b> 作业名称为空');
+      if(!tbl)issues.push('行'+rn+': <b>['+src+']</b> 表名称为空');
+      if(!expr)issues.push('行'+rn+': <b>['+src+']</b> 规则 <code>'+name+'</code> 正则表达式为空');
+      if(tbl){
+        var tblLower=tbl.toLowerCase();
+        var found=!!l4Names[tblLower];
+        // 模糊匹配：逐步去前缀后跟 G 列匹配
+        if(!found){
+          // dwi_fin_znbz_expensebill → znbz_expensebill
+          // dwi_enp_ep_accident_xxx → ep_accident_xxx
+          var parts=tblLower.split('_');
+          // 尝试去掉前1段、前2段、前3段
+          for(var skip=1;skip<=3&&!found;skip++){
+            if(parts.length>skip){
+              var stripped=parts.slice(skip).join('_');
+              if(stripped&&l4Names[stripped]){found=true;break}
+            }
+          }
+        }
+        // 包含匹配（任一方包含另一方）
+        if(!found){for(var k in l4Names){if(k.length>3&&(tblLower.indexOf(k)>=0||k.indexOf(tblLower)>=0)){found=true;break}}}
+        // 末尾匹配（G列值是L4表名的后缀）
+        if(!found){for(var k in l4Names){if(k.length>3&&tblLower.endsWith(k)){found=true;break}}}
+        if(!found)issues.push('行'+rn+': <b>['+src+']</b> 表 <code>'+tbl+'</code> 不在 02 L1-L5数据资产中');
+      }
+    }
+    return issues;
+  });
+
+  // 05 业务指标清单
+  checkSheet(S,'05 业务指标清单',function(rows,src){
+    var issues=[];if(rows.length<2)return['ℹ️ Sheet 为空（暂无指标）'];
+    var names={};
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];if(!rowHasData(row))continue;var rn=r+1,name=String(row[5]||'').trim();
+      if(!name)issues.push('行'+rn+': <b>['+src+']</b> 指标名称为空');
+      if(name){if(names[name])issues.push('行'+rn+': <b>['+src+']</b> 指标名称 <code>'+name+'</code> 重复');else names[name]=1}
+      if(!String(row[9]||'').trim())issues.push('行'+rn+': <b>['+src+']</b> 指标 <code>'+name+'</code> 指标定义为空');
+      if(!String(row[10]||'').trim())issues.push('行'+rn+': <b>['+src+']</b> 指标 <code>'+name+'</code> 计算公式为空');
+    }
+    return issues;
+  });
+
+  // 07 数据集成
+  checkSheet(S,'07 数据集成',function(rows,src){
+    var issues=[];if(rows.length<2)return['⚠️ Sheet 为空'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];if(!rowHasData(row))continue;var rn=r+1;
+      var srcTbl=String(row[4]||'').trim(),odsName=String(row[9]||'').trim();
+      if(!srcTbl)issues.push('行'+rn+': <b>['+src+']</b> 源库表名为空');
+      if(odsName&&!/^ods_/i.test(odsName))issues.push('行'+rn+': <b>['+src+']</b> 入湖表名 <code>'+odsName+'</code> 不符合 ods_ 前缀规范');
+      if(odsName)odsTables[odsName.toLowerCase()]=1;
+    }
+    return issues;
+  });
+
+  // 08 ODS
+  checkSheet(S,'08 ODS',function(rows,src){
+    var issues=[];if(rows.length<3)return['⚠️ Sheet 数据不足'];
+    for(var r=2;r<rows.length;r++){
+      var row=rows[r];if(!rowHasData(row))continue;var rn=r+1;
+      var tbl=String(row[1]||'').trim(),fldEn=String(row[4]||'').trim(),fldCn=String(row[5]||'').trim();
+      if(tbl){
+        odsTables[tbl.toLowerCase()]=1;
+        if(!/^ods_/i.test(tbl))issues.push('行'+rn+': <b>['+src+']</b> ODS表名 <code>'+tbl+'</code> 不符合 ods_ 前缀');
+      }
+      // 同时收集源端表名（O列=14）用于模糊匹配
+      var srcTbl=String(row[14]||'').trim();
+      if(srcTbl)odsTables[srcTbl.toLowerCase()]=1;
+      if(!fldEn&&fldCn)issues.push('行'+rn+': <b>['+src+']</b> ODS字段英文名为空，中文: '+fldCn);
+    }
+    return issues;
+  });
+
+  // 09 DWI
+  checkSheet(S,'09 DWI',function(rows,src){
+    var issues=[];if(rows.length<2)return['⚠️ Sheet 为空'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r];if(!rowHasData(row))continue;var rn=r+1;
+      var tbl=String(row[2]||'').trim(),odsRef=String(row[5]||'').trim();
+      if(tbl){
+        dwiTables[tbl.toLowerCase()]=1;
+        if(!/^dwi_/i.test(tbl))issues.push('行'+rn+': <b>['+src+']</b> DWI表名 <code>'+tbl+'</code> 不符合 dwi_ 前缀');
+      }
+      if(odsRef){
+        var odsLower=odsRef.toLowerCase();
+        var found=false;
+        if(odsTables[odsLower])found=true;
+        // 多级前缀剥离匹配
+        if(!found){
+          var parts=odsLower.split('_');
+          for(var skip=1;skip<=3&&!found;skip++){
+            if(parts.length>skip){
+              var stripped=parts.slice(skip).join('_');
+              if(stripped&&odsTables[stripped]){found=true;break}
+            }
+          }
+        }
+        // 包含匹配
+        if(!found){for(var odsKey in odsTables){if(odsKey.length>3&&(odsLower.indexOf(odsKey)>=0||odsKey.indexOf(odsLower)>=0)){found=true;break}}}
+        // 末尾匹配
+        if(!found){for(var odsKey in odsTables){if(odsKey.length>3&&odsLower.endsWith(odsKey)){found=true;break}}}
+        if(!found)issues.push('行'+rn+': <b>['+src+']</b> 涉及ODS表 <code>'+odsRef+'</code> 不在 08 ODS 中');
+      }
+    }
+    return issues;
+  });
+
+  // 10 DWR
+  checkSheet(S,'10 DWR',function(rows,src){
+    var issues=[];if(rows.length<2)return['ℹ️ Sheet 为空（暂无 DWR 数据）'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r],rn=r+1,tbl=String(row[2]||'').trim();
+      if(tbl&&!/^dwr_/i.test(tbl))issues.push('行'+rn+': <b>['+src+']</b> DWR表名 <code>'+tbl+'</code> 不符合 dwr_ 前缀');
+    }
+    return issues;
+  });
+
+  // 11 DM
+  checkSheet(S,'11 DM',function(rows,src){
+    var issues=[];if(rows.length<2)return['ℹ️ Sheet 为空（暂无 DM 数据）'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r],rn=r+1,tbl=String(row[2]||'').trim();
+      if(tbl&&!/^dm_/i.test(tbl))issues.push('行'+rn+': <b>['+src+']</b> DM表名 <code>'+tbl+'</code> 不符合 dm_ 前缀');
+    }
+    return issues;
+  });
+
+  // 12 数据服务接口清单
+  checkSheet(S,'12 数据服务接口清单',function(rows,src){
+    var issues=[];if(rows.length<2)return['ℹ️ Sheet 为空'];
+    for(var r=1;r<rows.length;r++){
+      var row=rows[r],rn=r+1;
+      var method=String(row[1]||'').trim(),path=String(row[2]||'').trim(),name=String(row[4]||'').trim();
+      if(!name)issues.push('行'+rn+': <b>['+src+']</b> 接口名称为空');
+      if(!path)issues.push('行'+rn+': <b>['+src+']</b> 接口路径为空');
+      if(path&&!/^\//.test(path))issues.push('行'+rn+': <b>['+src+']</b> 接口路径 <code>'+path+'</code> 不以 / 开头');
+      if(method&&!/(GET|POST|PUT|DELETE|PATCH)/i.test(method))issues.push('行'+rn+': <b>['+src+']</b> 接口方法 <code>'+method+'</code> 不规范');
+    }
+    return issues;
+  });
+
+  // 汇总
+  var total=0;
+  for(var k in state.issues)total+=state.issues[k].length;
+  state.summary={total:total,sheetCount:Object.keys(state.sheets).length};
+}
+
+function checkSheet(S,namePattern,fn){
+  var pat=namePattern.replace(/\s+/g,'').toLowerCase();
+  for(var name in S){
+    var n=name.replace(/\s+/g,'').toLowerCase();
+    if(n.indexOf(pat)>=0||pat.indexOf(n)>=0||n===pat){
+      var entries=S[name];
+      var allIssues=[];
+      entries.forEach(function(entry){
+        var issues=fn(entry.data,entry.src);
+        allIssues=allIssues.concat(issues);
+      });
+      if(!state.issues[name])state.issues[name]=[];
+      state.issues[name]=state.issues[name].concat(allIssues);
+    }
+  }
+}
+</script>
+<script>
+// ========== 结果渲染 ==========
+function renderResult(){
+  var total=0;for(var k in state.issues)total+=state.issues[k].length;
+  var sheetNames=Object.keys(state.sheets).filter(function(n){return n!=='目录'});
+
+  var html='<div class="toolbar"><button class="btn" onclick="render()">← 重新选择文件</button><span style="font-size:13px;color:var(--text3)">'+state.files.join(' + ')+'</span><button class="btn-p btn" onclick="exportReport()">📥 导出检查报告</button></div>';
+
+  // 统计
+  html+='<div class="stats">';
+  html+='<div class="stat"><div class="val" style="color:var(--p)">'+sheetNames.length+'</div><div class="label">Sheet 页</div></div>';
+  html+='<div class="stat"><div class="val" style="color:var(--d)">'+total+'</div><div class="label">问题总数</div></div>';
+  var errSheets=0,okSheets=0;
+  sheetNames.forEach(function(n){if(state.issues[n]&&state.issues[n].length>0)errSheets++;else okSheets++});
+  html+='<div class="stat"><div class="val" style="color:var(--s)">'+okSheets+'</div><div class="label">通过</div></div>';
+  html+='<div class="stat"><div class="val" style="color:var(--w)">'+errSheets+'</div><div class="label">有问题</div></div>';
+  html+='</div>';
+
+  // Sheet 标签
+  html+='<div class="sheet-tabs">';
+  sheetNames.forEach(function(name,idx){
+    var cnt=state.issues[name]?state.issues[name].length:0;
+    var dot=cnt===0?'dot-ok':cnt<10?'dot-warn':'dot-err';
+    html+='<div class="sheet-tab" onclick="document.getElementById(\'sec_'+idx+'\').scrollIntoView({behavior:\'smooth\',block:\'start\'})"><span class="dot '+dot+'"></span>'+name+' <span class="cnt">('+cnt+')</span></div>';
+  });
+  html+='</div>';
+
+  // 各 Sheet 问题详情
+  sheetNames.forEach(function(name,idx){
+    var issues=state.issues[name]||[];
+    var cnt=issues.length;
+    var badgeCls=cnt===0?'ok':'';
+    html+='<div class="section" id="sec_'+idx+'"><div class="section-hd" onclick="this.nextElementSibling.classList.toggle(\'collapsed\')">';
+    html+=cnt===0?'✅':'⚠️';
+    html+=' '+name+' <span class="badge '+badgeCls+'">'+(cnt===0?'通过':cnt+'个问题')+'</span></div>';
+    html+='<div class="section-bd'+(cnt===0?' collapsed':'')+'">';
+    if(cnt===0){html+='<div class="empty">✅ 该 Sheet 检查通过，无问题</div>'}
+    else{issues.slice(0,50).forEach(function(msg){html+='<div class="issue-item">'+msg+'</div>'});if(cnt>50)html+='<div class="issue-item" style="color:var(--text3)">...共 '+cnt+' 个问题</div>'}
+    html+='</div></div>';
+  });
+
+  document.getElementById('app').innerHTML=html;
+}
+
+function saveHistory(){
+  var total=0;for(var k in state.issues)total+=state.issues[k].length;
+  var h={name:state.files.join('+'),sheetCount:Object.keys(state.sheets).length,issueCount:total,time:new Date().toLocaleString('zh-CN'),data:{sheets:state.sheets,issues:state.issues,files:state.files}};
+  state.history.unshift(h);
+  if(state.history.length>5)state.history=state.history.slice(0,5);
+  try{localStorage.setItem('gov_history',JSON.stringify(state.history))}catch(e){}
+}
+
+function exportReport(){
+  var wb=XLSX.utils.book_new();
+  // 汇总 sheet
+  var s1=[['Sheet页','问题数','状态']];
+  Object.keys(state.sheets).forEach(function(name){
+    var cnt=state.issues[name]?state.issues[name].length:0;
+    s1.push([name,cnt,cnt===0?'✅ 通过':'⚠️ '+cnt+'个问题']);
+  });
+  var ws1=XLSX.utils.aoa_to_sheet(s1);
+  ws1['!cols']=[{wch:30},{wch:10},{wch:20}];
+  XLSX.utils.book_append_sheet(wb,ws1,'检查汇总');
+
+  // 问题明细 sheet
+  var s2=[['序号','Sheet页','问题描述']];
+  var idx=0;
+  for(var name in state.issues){
+    state.issues[name].forEach(function(msg){
+      idx++;
+      s2.push([idx,name,msg.replace(/<\/?[^>]+>/g,'')]);
+    });
+  }
+  var ws2=XLSX.utils.aoa_to_sheet(s2);
+  ws2['!cols']=[{wch:6},{wch:25},{wch:80}];
+  XLSX.utils.book_append_sheet(wb,ws2,'问题明细');
+
+  var now=new Date();
+  var ts=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')+' '+String(now.getHours()).padStart(2,'0')+String(now.getMinutes()).padStart(2,'0')+String(now.getSeconds()).padStart(2,'0');
+  // 智能合并文件名：提取公共前缀 + 各文件差异部分
+  var names=state.files.map(function(f){return f.replace(/\.xlsx$/i,'')});
+  var smartName='';
+  if(names.length===1){smartName=names[0]}
+  else{
+    // 找公共前缀
+    var prefix='';
+    for(var i=0;i<names[0].length;i++){
+      var ch=names[0][i];
+      if(names.every(function(n){return n[i]===ch}))prefix+=ch;
+      else break;
+    }
+    prefix=prefix.replace(/[-_\s]+$/,''); // 去掉末尾分隔符
+    // 提取差异部分
+    var diffs=names.map(function(n){return n.substring(prefix.length).replace(/^[-_\s]+/,'')});
+    if(prefix&&diffs.every(function(d){return d.length<=4})){
+      smartName=prefix+'('+diffs.join('+')+')'
+    }else if(prefix){
+      smartName=prefix+'等'+names.length+'个文档'
+    }else{
+      smartName=names.length+'个文档交叉检查'
+    }
+  }
+  XLSX.writeFile(wb, smartName+'_交付件检查_'+ts+'.xlsx');
+}
+</script>

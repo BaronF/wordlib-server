@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: wordlib-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: PORT
+        value: 8080
+    disk:
+      name: wordlib-data
+      mountPath: /opt/render/project/src
+      sizeGB: 1
