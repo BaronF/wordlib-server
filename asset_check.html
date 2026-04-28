@@ -111,7 +111,8 @@ function onFiles(files) {
   var names = fileList.map(function(f){return f.name}).join(' + ');
   document.getElementById('app').innerHTML = '<div class="loading"><div class="spin">⏳</div><div style="margin-top:12px">正在解析 <b>'+names+'</b> ('+fileList.length+'个文件)...</div></div>';
   
-  var allL4=[], allL5=[], pending=fileList.length, allNames=[];
+  var allL4=[], allL5=[], allDictFields=[], pending=fileList.length, allNames=[];
+  state.revisions = []; // 重置修订记录
   fileList.forEach(function(file) {
     var reader = new FileReader();
     reader.onload = function(e) {
@@ -126,8 +127,9 @@ function onFiles(files) {
           parseDocxAsync(e.target.result, file.name, src, function(r){
             r.l4.forEach(function(x){x.source=src}); r.l5.forEach(function(x){x.source=src});
             allL4=allL4.concat(r.l4); allL5=allL5.concat(r.l5);
+            if (r.dictFields) allDictFields=allDictFields.concat(r.dictFields);
             pending--;
-            if(pending<=0) finishParse(allL4, allL5, allNames.join(' + '));
+            if(pending<=0) finishParse(allL4, allL5, allNames.join(' + '), allDictFields);
           });
           return; // async
         }
@@ -136,7 +138,7 @@ function onFiles(files) {
         return;
       }
       pending--;
-      if(pending<=0) finishParse(allL4, allL5, allNames.join(' + '));
+      if(pending<=0) finishParse(allL4, allL5, allNames.join(' + '), allDictFields);
     };
     reader.readAsArrayBuffer(file);
   });
@@ -162,12 +164,66 @@ function parseDocxAsync(buf, fname, src, callback) {
     var body = doc.getElementsByTagNameNS(WNS, 'body')[0];
     if (!body) throw new Error('无法解析文档结构');
 
+    // 提取修订标记（Track Changes）
+    var revisions = [];
+    var insEls = doc.getElementsByTagNameNS(WNS, 'ins');
+    for (var ri = 0; ri < insEls.length; ri++) {
+      var el = insEls[ri];
+      var author = el.getAttribute('w:author') || '未知';
+      var date = el.getAttribute('w:date') || '';
+      var texts = el.getElementsByTagNameNS(WNS, 't');
+      var txt = '';
+      for (var ti = 0; ti < texts.length; ti++) txt += (texts[ti].textContent || '');
+      if (txt.trim()) revisions.push({type:'插入', author:author, date:date, text:txt.trim(), src:src});
+    }
+    var delEls = doc.getElementsByTagNameNS(WNS, 'del');
+    for (var ri = 0; ri < delEls.length; ri++) {
+      var el = delEls[ri];
+      var author = el.getAttribute('w:author') || '未知';
+      var date = el.getAttribute('w:date') || '';
+      var delTexts = el.getElementsByTagNameNS(WNS, 'delText');
+      var txt = '';
+      for (var ti = 0; ti < delTexts.length; ti++) txt += (delTexts[ti].textContent || '');
+      if (txt.trim()) revisions.push({type:'删除', author:author, date:date, text:txt.trim(), src:src});
+    }
+    // 合并相邻的碎片修订（Word 经常把一个修改拆成多个 w:ins/w:del）
+    var merged = [];
+    for (var mi = 0; mi < revisions.length; mi++) {
+      var cur = revisions[mi];
+      if (merged.length > 0) {
+        var prev = merged[merged.length - 1];
+        if (prev.type === cur.type && prev.author === cur.author && prev.date === cur.date) {
+          prev.text += cur.text;
+          continue;
+        }
+      }
+      merged.push({type:cur.type, author:cur.author, date:cur.date, text:cur.text, src:cur.src});
+    }
+    // 存储修订到全局
+    if (!state.revisions) state.revisions = [];
+    state.revisions = state.revisions.concat(merged);
+
+    // 辅助：提取接受修订后的文本（忽略 w:del 中的内容）
+    function getAcceptedText(node) {
+      var text = '';
+      for (var ci = 0; ci < node.childNodes.length; ci++) {
+        var cn = node.childNodes[ci];
+        if (cn.localName === 'del') continue;
+        if (cn.nodeType === 3) { text += cn.textContent; continue; }
+        if (cn.localName === 't') { text += cn.textContent; continue; }
+        if (cn.localName === 'ins') { text += getAcceptedText(cn); continue; }
+        text += getAcceptedText(cn);
+      }
+      // 清理零宽字符
+      return text.replace(/[\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
+    }
+
     var elements = [];
     for (var i = 0; i < body.childNodes.length; i++) {
       var child = body.childNodes[i];
       var tag = child.localName;
       if (tag === 'p') {
-        var txt = child.textContent.trim();
+        var txt = getAcceptedText(child).trim();
         if (txt) elements.push({t:'P', v:txt});
       } else if (tag === 'tbl') {
         var rows = [];
@@ -175,7 +231,7 @@ function parseDocxAsync(buf, fname, src, callback) {
         for (var r = 0; r < trs.length; r++) {
           var cells = [];
           var tcs = trs[r].getElementsByTagNameNS(WNS, 'tc');
-          for (var c = 0; c < tcs.length; c++) cells.push(tcs[c].textContent.trim());
+          for (var c = 0; c < tcs.length; c++) cells.push(getAcceptedText(tcs[c]).trim());
           rows.push(cells);
         }
         elements.push({t:'T', v:rows});
@@ -199,91 +255,229 @@ function extractFromElements(elements, fname) {
 }
 
 function extractFromElementsSync(elements, fname) {
-  // 从文件名提取 L1（如"数据库设计_品质L3" → "品质"）
   var l1match = fname.match(/[_\-](.+?)(?:L\d|（|\(|\.|$)/);
   var l1 = l1match ? l1match[1].trim() : '';
-  // 也尝试从文档标题中提取（如"第一卷 品质管理"）
   for (var k=0; k<Math.min(elements.length,20); k++) {
     if (elements[k].t==='P') {
       var m = elements[k].v.match(/第.卷\s*(.+?)(?:管理)?$/);
       if (m) { l1 = m[1].replace(/管理$/,'').trim(); break; }
     }
   }
-  var l4=[], l5=[], mod='未知', st=null, tbls=[], defIdx=0;
+  var l4=[], l5=[], mod='未知';
+  // 第一遍：提取 DB清单（L4 表名）
+  var inList = false;
   for (var i=0; i<elements.length; i++) {
     var el = elements[i];
-    if (el.t==='T' && st) {
+    if (el.t==='P') {
+      if (el.v==='DB清单') inList=true;
+      else if (el.v==='DB定义'||el.v==='ER图'||el.v==='数据字典') inList=false;
+    }
+    if (el.t==='T' && inList) {
       var rows=el.v; if(rows.length<2) continue;
       var hdr=rows[0].join(' ');
-      if (st==='list' && hdr.indexOf('英文')>=0) {
-        for(var r=1;r<rows.length;r++){var row=rows[r];if(row.length>=3&&row[1]){l4.push({l1:l1,mod:mod,en:row[1],cn:row[2],pk:row[4]||'',fk:row[5]||''});tbls.push([row[1],row[2]])}}
-        st=null;
-      } else if (st==='def' && (hdr.indexOf('字段')>=0||hdr.indexOf('英文')>=0)) {
-        var te=tbls[defIdx]?tbls[defIdx][0]:'unknown_'+defIdx, tc=tbls[defIdx]?tbls[defIdx][1]:'';
-        defIdx++;
-        // 自动检测列位置
-        var hdrs=rows[0], tpCol=-1, lenCol=-1, pkCol=-1, nulCol=-1;
-        for(var ci=0;ci<hdrs.length;ci++){
-          var h=hdrs[ci];
-          if(h.indexOf('类型')>=0&&tpCol<0) tpCol=ci;
-          else if(h.indexOf('长度')>=0&&lenCol<0) lenCol=ci;
-          else if((h.indexOf('主')>=0&&h.indexOf('键')>=0)||h.indexOf('外键')>=0) pkCol=ci;
-          else if(h.indexOf('空否')>=0||h.indexOf('空')>=0&&h.length<=3) nulCol=ci;
+      if (hdr.indexOf('英文')>=0) {
+        // 找模块列
+        var modCol=-1;
+        for(var ci=0;ci<rows[0].length;ci++){if(rows[0][ci].indexOf('模块')>=0) modCol=ci;}
+        for(var r=1;r<rows.length;r++){
+          var row=rows[r];if(row.length>=3&&row[1]){
+            var rowMod = modCol>=0 ? (row[modCol]||'').trim() : mod;
+            l4.push({l1:l1,mod:rowMod||mod,en:row[1],cn:row[2],pk:row[4]||'',fk:row[5]||''});
+          }
         }
-        for(var r=1;r<rows.length;r++){var row=rows[r];if(row.length>=3&&row[1]){l5.push({l1:l1,mod:mod,tbl_en:te,tbl_cn:tc,en:row[1],cn:row[2],pkfk:pkCol>=0?row[pkCol]||'':'',tp:tpCol>=0?row[tpCol]||'':'',len:lenCol>=0?row[lenCol]||'':'',nul:nulCol>=0?row[nulCol]||'':''})}}
+        inList=false;
       }
-      continue;
-    }
-    if (el.t!=='P') continue;
-    var txt=el.v;
-    if (/^1\.\d+/.test(txt)&&/\d$/.test(txt)) continue;
-    // 跳过目录中的 HYPERLINK/TOC 行
-    if (/HYPERLINK|TOC |PAGEREF/.test(txt)) continue;
-    // 跳过注释行 /*...*/
-    if (/^\/\*/.test(txt)) continue;
-    // 跳过纯数字行（如图片占位符）
-    if (/^-?\d+$/.test(txt)) continue;
-    if (txt==='DB清单'){st='list'}
-    else if(txt==='DB定义'){st='def';defIdx=0}
-    else if(txt==='ER图'||txt==='数据字典'){st=null}
-    else if(txt==='数据库设计'){st=null}
-    else if(st==='list'){
-      // DB清单状态下遇到非表格段落，保持状态不变（跳过注释等）
-    }
-    else if(st==='def'){
-      var isNext=false;for(var j=i+1;j<Math.min(i+3,elements.length);j++){if(elements[j].t==='P'&&(elements[j].v==='ER图'||elements[j].v==='DB清单')){isNext=true;break}}
-      if(isNext){mod=txt.split('（')[0].split('(')[0].trim();tbls=[];st=null}
-    } else if(!/(DB清单|DB定义|ER图|数据字典|目录|修订|编制|审核|批准|烟台|江苏|需求|第一卷|数据库设计|项 目)/.test(txt)){
-      // 识别模块名：长度>2，不以数字开头，不以冒号/：结尾（排除子标题如"模型权限："），不含 HYPERLINK
-      if(txt.length>2&&!/^\d/.test(txt)&&!/[:：]$/.test(txt)&&txt.indexOf('HYPERLINK')<0){mod=txt.split('（')[0].split('(')[0].trim();tbls=[];st=null}
     }
   }
-  return {l4:l4, l5:l5};
+  // 构建表名映射：英文名 -> 中文名
+  var tblMap = {};
+  l4.forEach(function(t){ tblMap[t.en.toLowerCase()] = t.cn; });
+
+  // 第二遍：提取 DB定义（L5 字段）
+  // 策略：从段落提取表名，如果和 L4 不一致则模糊匹配 L4
+  var curTblEn='', curTblCn='', inDef=false, defTblIdx=0;
+  // 按模块分组的 L4 表名顺序（用于按序匹配）
+  var l4List = l4.map(function(t){ return {en:t.en, cn:t.cn, mod:t.mod, used:false}; });
+
+  function fuzzyMatchL4(en, cn) {
+    // 精确匹配（英文名+中文名都匹配）
+    if (cn) {
+      for (var fi=0; fi<l4List.length; fi++) {
+        if (!l4List[fi].used && l4List[fi].en.toLowerCase() === en.toLowerCase() && l4List[fi].cn === cn) return l4List[fi];
+      }
+    }
+    // 精确匹配（仅英文名，优先未使用的）
+    for (var fi=0; fi<l4List.length; fi++) {
+      if (!l4List[fi].used && l4List[fi].en.toLowerCase() === en.toLowerCase()) return l4List[fi];
+    }
+    // 不做包含匹配（避免 mdm_model 匹配到 mdm_model_attribute）
+    return null;
+  }
+
+  for (var i=0; i<elements.length; i++) {
+    var el = elements[i];
+    if (el.t==='P') {
+      var txt = el.v;
+      if (txt==='DB定义') { inDef=true; continue; }
+      if (txt==='ER图'||txt==='DB清单') { inDef=false; continue; }
+      if (txt==='数据字典') continue;
+      txt = txt.replace(/[\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
+      // 匹配表名段落：xxx（yyy）或 xxx(yyy)
+      var tblMatch = txt.match(/^([a-zA-Z][a-zA-Z0-9_]*)[\s]*[（(](.+?)[）)]/);
+      if (tblMatch) {
+        var parsedEn = tblMatch[1].trim();
+        var parsedCn = tblMatch[2].trim();
+        // 尝试从 L4 精确/模糊匹配
+        var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
+        if (l4Match) {
+          curTblEn = l4Match.en;
+          curTblCn = l4Match.cn;
+          l4Match.used = true;
+        } else {
+          curTblEn = parsedEn;
+          curTblCn = parsedCn;
+        }
+        defTblIdx++;
+        inDef = true;
+        continue;
+      }
+      // 匹配只有中文名的表名段落：（xxx）或 (xxx)
+      var cnOnlyMatch = txt.match(/^[（(](.+?)[）)]\s*$/);
+      if (cnOnlyMatch && inDef) {
+        curTblCn = cnOnlyMatch[1].trim();
+        curTblEn = curTblCn;
+        defTblIdx++;
+        continue;
+      }
+      if (inDef && /^[a-zA-Z][a-zA-Z0-9_]+$/.test(txt.trim())) {
+        var parsedEn = txt.trim();
+        var l4Match = fuzzyMatchL4(parsedEn, null);
+        if (l4Match) {
+          curTblEn = l4Match.en;
+          curTblCn = l4Match.cn;
+          l4Match.used = true;
+        } else {
+          curTblEn = parsedEn;
+          curTblCn = tblMap[parsedEn.toLowerCase()] || '';
+        }
+        defTblIdx++;
+        continue;
+      }
+    }
+    if (el.t==='T' && (inDef || curTblEn)) {
+      var rows=el.v; if(rows.length<2) continue;
+      var hdr=rows[0].join(' ');
+      if (hdr.indexOf('字段')>=0 || hdr.indexOf('英文')>=0) {
+        var hdrs=rows[0], enCol=-1, cnCol=-1, tpCol=-1, lenCol=-1, pkCol=-1, nulCol=-1;
+        for(var ci=0;ci<hdrs.length;ci++){
+          var h=hdrs[ci];
+          if((h.indexOf('英文')>=0||h.indexOf('字段英文')>=0)&&enCol<0) enCol=ci;
+          else if((h.indexOf('中文')>=0||h.indexOf('字段中文')>=0)&&cnCol<0) cnCol=ci;
+          else if(h.indexOf('类型')>=0&&tpCol<0) tpCol=ci;
+          else if(h.indexOf('长度')>=0&&lenCol<0) lenCol=ci;
+          else if((h.indexOf('主')>=0&&h.indexOf('键')>=0)||h.indexOf('外键')>=0) pkCol=ci;
+          else if(h.indexOf('空否')>=0||(h.indexOf('空')>=0&&h.length<=3)) nulCol=ci;
+        }
+        if(enCol<0) enCol=1; if(cnCol<0) cnCol=2;
+        // 从 L4 中查找模块名
+        var rowMod = mod;
+        l4.forEach(function(t){ if(t.en.toLowerCase()===curTblEn.toLowerCase() && t.mod) rowMod=t.mod; });
+        var seenInThisTable = {};
+        for(var r=1;r<rows.length;r++){
+          var row=rows[r];
+          if(enCol>=row.length) continue;
+          var fen=row[enCol].trim(), fcn=cnCol<row.length?row[cnCol].trim():'';
+          if(!fen) continue;
+          // 如果遇到重复的主键字段（如 ID），说明是新的子表，递增 tbl_idx
+          var fenLower = fen.toLowerCase();
+          if(seenInThisTable[fenLower] && (fenLower==='id' || (pkCol>=0 && pkCol<row.length && /pk|主/i.test(row[pkCol])))) {
+            defTblIdx++;
+            seenInThisTable = {};
+          }
+          seenInThisTable[fenLower] = true;
+          l5.push({l1:l1, mod:rowMod, tbl_en:curTblEn, tbl_cn:curTblCn, tbl_idx:defTblIdx,
+            en:fen, cn:fcn,
+            pkfk:pkCol>=0&&pkCol<row.length?row[pkCol].trim():'',
+            tp:tpCol>=0&&tpCol<row.length?row[tpCol].trim():'',
+            len:lenCol>=0&&lenCol<row.length?row[lenCol].trim():'',
+            nul:nulCol>=0&&nulCol<row.length?row[nulCol].trim():''});
+        }
+      }
+    }
+  }
+  // 补充扫描：从数据字典表提取字段名用于一义多词检测（不加入 L5）
+  var dictFields = [];
+  for (var ei=0; ei<elements.length; ei++) {
+    if (elements[ei].t !== 'T') continue;
+    var trows = elements[ei].v;
+    if (trows.length < 3) continue;
+    var thdr = trows[0];
+    var tenCol=-1, tcnCol=-1;
+    for (var tci=0; tci<thdr.length; tci++) {
+      var th = thdr[tci];
+      if ((th.indexOf('代码')>=0 || th.indexOf('编码')>=0) && th.indexOf('中文')<0 && tenCol<0) tenCol=tci;
+      if ((th.indexOf('字段名称')>=0 || th.indexOf('数据字段名称')>=0) && th.indexOf('英文')<0 && tcnCol<0) tcnCol=tci;
+    }
+    if (tenCol<0 || tcnCol<0) continue;
+    for (var tri=1; tri<trows.length; tri++) {
+      var trow = trows[tri];
+      if (tenCol>=trow.length || tcnCol>=trow.length) continue;
+      var ten = trow[tenCol].trim(), tcn = trow[tcnCol].trim();
+      if (!ten || !tcn || !/^[a-zA-Z]/.test(ten)) continue;
+      dictFields.push({en:ten, cn:tcn});
+    }
+  }
+  return {l4:l4, l5:l5, dictFields:dictFields};
 }
 </script>
 <script>
 // ===== XLSX 解析 =====
 function parseXlsx(buf, fname) {
   var wb = XLSX.read(buf, {type:'array'});
-  // 找包含 L5 的 sheet
-  var sheetName = wb.SheetNames.find(function(n){return n.indexOf('L5')>=0||n.indexOf('数据资产')>=0}) || wb.SheetNames[1] || wb.SheetNames[0];
+  // 找包含 L5 或数据资产的 sheet，否则用第一个有数据的 sheet
+  var sheetName = wb.SheetNames.find(function(n){return n.indexOf('L5')>=0||n.indexOf('数据资产')>=0});
+  if (!sheetName) {
+    // 找第一个有足够数据的 sheet
+    for (var si=0; si<wb.SheetNames.length; si++) {
+      var testWs = wb.Sheets[wb.SheetNames[si]];
+      var testData = XLSX.utils.sheet_to_json(testWs, {header:1, defval:''});
+      if (testData.length >= 3) { sheetName = wb.SheetNames[si]; break; }
+    }
+  }
+  if (!sheetName) sheetName = wb.SheetNames[0];
   var ws = wb.Sheets[sheetName];
   var data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
   if (data.length < 2) throw new Error('Sheet "'+sheetName+'" 数据为空');
 
-  // 自动检测列
+  // 自动检测列（支持多种表头格式）
   var hdr = data[0];
   var l4eCol=-1,l4cCol=-1,l5eCol=-1,l5cCol=-1,modCol=-1,tpCol=-1,lenCol=-1;
   for (var c=0;c<hdr.length;c++) {
-    var h = String(hdr[c]);
-    if(h.indexOf('逻辑实体')>=0&&h.indexOf('英文')>=0) l4eCol=c;
-    else if(h.indexOf('逻辑实体')>=0&&h.indexOf('中文')>=0) l4cCol=c;
-    else if(h.indexOf('属性')>=0&&h.indexOf('英文')>=0&&h.toUpperCase().indexOf('L5')>=0) l5eCol=c;
-    else if(h.indexOf('属性')>=0&&h.indexOf('中文')>=0&&h.toUpperCase().indexOf('L5')>=0) l5cCol=c;
+    var h = String(hdr[c]).trim();
+    var hUp = h.toUpperCase();
+    // L4 表名列
+    if((h.indexOf('逻辑实体')>=0&&h.indexOf('英文')>=0)||(h.indexOf('表英文')>=0)||(h==='表名'&&l4eCol<0)) l4eCol=c;
+    else if((h.indexOf('逻辑实体')>=0&&h.indexOf('中文')>=0)||(h.indexOf('表中文')>=0)||(h==='表中文名'&&l4cCol<0)) l4cCol=c;
+    // L5 字段列
+    else if((h.indexOf('属性')>=0&&h.indexOf('英文')>=0&&hUp.indexOf('L5')>=0)||(h.indexOf('字段英文')>=0)||(h==='字段名'&&l5eCol<0)||(h==='英文名'&&l5eCol<0)) l5eCol=c;
+    else if((h.indexOf('属性')>=0&&h.indexOf('中文')>=0&&hUp.indexOf('L5')>=0)||(h.indexOf('字段中文')>=0)||(h==='中文名'&&l5cCol<0)) l5cCol=c;
+    // 其他列
     else if(h==='L1'||h==='L2'||h.indexOf('模块')>=0) modCol=c;
     else if(h.indexOf('数据类型')>=0||h==='类型') tpCol=c;
     else if(h.indexOf('字段长度')>=0||h==='长度') lenCol=c;
   }
+  // 如果没找到明确的表头，不使用默认列号（避免误解析）
+  if(l4eCol<0 && l5eCol<0) {
+    // 尝试第二种格式：每行一个字段，有"表名"和"字段名"列
+    for (var c=0;c<hdr.length;c++) {
+      var h = String(hdr[c]).trim();
+      if((h==='表名'||h.indexOf('表英文名')>=0||h.indexOf('TABLE')>=0)&&l4eCol<0) l4eCol=c;
+      else if((h==='表中文名'||h.indexOf('表中文')>=0)&&l4cCol<0) l4cCol=c;
+      else if((h==='字段名'||h.indexOf('字段英文')>=0||h==='COLUMN'||h==='FIELD')&&l5eCol<0) l5eCol=c;
+      else if((h==='字段中文名'||h.indexOf('字段中文')>=0||h==='字段说明'||h==='字段描述')&&l5cCol<0) l5cCol=c;
+    }
+  }
+  // 还是没找到，用默认列号（华新格式）
   if(l4eCol<0) l4eCol=4; if(l4cCol<0) l4cCol=5;
   if(l5eCol<0) l5eCol=9; if(l5cCol<0) l5cCol=10;
 
@@ -300,12 +494,14 @@ function parseXlsx(buf, fname) {
 }
 
 // ===== 解析完成 → 分析 =====
-function finishParse(l4, l5, fname) {
+function finishParse(l4, l5, fname, dictFields) {
   state.l4=l4; state.l5=l5;
   state.fname=fname.replace(/\.(docx|xlsx)$/i,'');
-  // 命名分析
+  // 命名分析（L5 字段 + 数据字典字段一起参与）
   var en2cn={}, cn2en={};
-  l5.forEach(function(a){
+  var allFields = l5.slice();
+  if (dictFields && dictFields.length) allFields = allFields.concat(dictFields);
+  allFields.forEach(function(a){
     if(!a.en||!a.cn) return;
     if(!en2cn[a.en]) en2cn[a.en]={};
     en2cn[a.en][a.cn] = (en2cn[a.en][a.cn]||0)+1;
@@ -331,10 +527,32 @@ function finishParse(l4, l5, fname) {
   state.history.unshift(h);
   if(state.history.length>10) state.history=state.history.slice(0,10);
   try{localStorage.setItem('asset_history',JSON.stringify(state.history))}catch(e){}
+  sendFeishuNotify(h);
   renderResult();
 }
 </script>
 <script>
+// ========== 飞书通知 ==========
+function sendFeishuNotify(h) {
+  var username = '未知';
+  try { if(window.parent&&window.parent.localStorage) username=window.parent.localStorage.getItem('wordlib_username')||'未知'; } catch(e){}
+  if(username==='未知') try { username=localStorage.getItem('wordlib_username')||'未知'; } catch(e){}
+  doSendFeishu(h, username);
+}
+function doSendFeishu(h, username) {
+  try {
+    var totalIssues = (h.mcn||0) + (h.men||0) + (h.fmt||0);
+    var statusIcon = totalIssues === 0 ? '✅' : '⚠️';
+    var msg = { msg_type:'interactive', card:{ header:{ title:{tag:'plain_text',content:statusIcon+' 数据资产规范检查通知'}, template:totalIssues===0?'green':'orange' }, elements:[
+      {tag:'div',text:{tag:'lark_md',content:'**使用者：**'+username}},
+      {tag:'div',text:{tag:'lark_md',content:'**文件名称：**'+(h.name||'-')}},
+      {tag:'div',fields:[{is_short:true,text:{tag:'lark_md',content:'**L4 实体：**'+(h.l4||0)+' 个'}},{is_short:true,text:{tag:'lark_md',content:'**L5 属性：**'+(h.l5||0)+' 条'}},{is_short:true,text:{tag:'lark_md',content:'**命名问题：**'+((h.mcn||0)+(h.men||0))+' 个'}},{is_short:true,text:{tag:'lark_md',content:'**格式问题：**'+(h.fmt||0)+' 个'}}]},
+      {tag:'div',text:{tag:'lark_md',content:'**检查时间：**'+(h.time||'-')}},
+      {tag:'hr'},{tag:'note',elements:[{tag:'plain_text',content:'来自词库管理系统-数据资产规范管控'}]}
+    ]}};
+    fetch('https://open.feishu.cn/open-apis/bot/v2/hook/2b45e192-3ac9-4c74-83aa-f98531841562',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg)}).catch(function(){});
+  } catch(e){}
+}
 // ========== 格式校验 ==========
 function checkFormat(l4, l5) {
   var issues = [];
@@ -354,10 +572,22 @@ function checkFormat(l4, l5) {
   });
   // 4. 表名命名规范
   l4.forEach(function(e){if(e.en&&!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(e.en)) issues.push({type:'表名不规范',msg:src(e)+'表 <code>'+e.en+'</code> 含非法字符'})});
-  // 5. 同表字段重复
-  var flds={};
-  l5.forEach(function(a){var k=(a.source||'')+'||'+a.tbl_en+'||'+a.en.toLowerCase();flds[k]=(flds[k]||0)+1;if(!flds[k+'_ref'])flds[k+'_ref']=a});
-  for(var k in flds){if(typeof flds[k]==='number'&&flds[k]>1){var ref=flds[k+'_ref'];var p=k.split('||');issues.push({type:'字段名重复',msg:srcTbl(ref||{source:p[0],tbl_cn:p[1]})+'字段 <code>'+p[2]+'</code> 重复 '+flds[k]+' 次'})}}
+  // 5. 同表字段重复（用 tbl_idx 精确区分每个表）
+  var tblGroups = {};
+  l5.forEach(function(a) {
+    var gk = (a.source||'') + '||' + (a.tbl_idx||0);
+    if (!tblGroups[gk]) tblGroups[gk] = {ref:a, fields:{}};
+    var fld = a.en.toLowerCase();
+    tblGroups[gk].fields[fld] = (tblGroups[gk].fields[fld]||0) + 1;
+  });
+  for (var gk in tblGroups) {
+    var g = tblGroups[gk];
+    for (var fld in g.fields) {
+      if (g.fields[fld] > 1) {
+        issues.push({type:'字段名重复',msg:srcTbl(g.ref)+'字段 <code>'+fld+'</code> 重复 '+g.fields[fld]+' 次'});
+      }
+    }
+  }
   // 6. 空字段名
   l5.forEach(function(a){
     if(!a.en.trim()) issues.push({type:'空字段名',msg:srcTbl(a)+'字段英文名为空，中文: '+a.cn});
@@ -381,6 +611,64 @@ function checkFormat(l4, l5) {
   var hasPk={};
   l5.forEach(function(a){var pk=(a.pkfk||'').toUpperCase();if(pk.indexOf('PK')>=0||pk.indexOf('主')>=0||pk==='Y') hasPk[(a.source||'')+'||'+a.tbl_en]=1});
   l4.forEach(function(e){if(e.en&&!hasPk[(e.source||'')+'||'+e.en]&&!e.pk) issues.push({type:'主键缺失',msg:src(e)+'表 <code>'+e.en+'</code>('+e.cn+') 未定义主键'})});
+  // 10.5 DB定义与DB清单一致性检测
+  var l4EnSet = {};
+  l4.forEach(function(e){ l4EnSet[e.en.toLowerCase()] = e.cn; });
+  var l5TblSet = {};
+  l5.forEach(function(a){ if(a.tbl_en) l5TblSet[a.tbl_en.toLowerCase()] = a.tbl_cn; });
+  // DB定义与DB清单一致性：只检测有实际问题的情况
+  // 同一中文表名对应不同英文名（合并 L4 和 L5 一起检测）
+  var allCnToEns = {};
+  l4.forEach(function(e){
+    if(!e.cn) return;
+    if(!allCnToEns[e.cn]) allCnToEns[e.cn] = {};
+    allCnToEns[e.cn][e.en] = 'DB清单';
+  });
+  l5.forEach(function(a){
+    if(!a.tbl_cn || !a.tbl_en || a.tbl_en==='数据字典') return;
+    // 如果英文名等于中文名，说明DB定义中缺少英文表名
+    if(a.tbl_en === a.tbl_cn) {
+      issues.push({type:'表名缺失',msg:'DB定义中表 <code>'+a.tbl_cn+'</code> 缺少英文表名'});
+      return;
+    }
+    if(!allCnToEns[a.tbl_cn]) allCnToEns[a.tbl_cn] = {};
+    allCnToEns[a.tbl_cn][a.tbl_en] = 'DB定义';
+  });
+  // 去重：同一个缺失只报一次
+  var seenMissing = {};
+  issues = issues.filter(function(iss) {
+    if (iss.type === '表名缺失') {
+      if (seenMissing[iss.msg]) return false;
+      seenMissing[iss.msg] = true;
+    }
+    return true;
+  });
+  for(var cn in allCnToEns){
+    var ens = Object.keys(allCnToEns[cn]);
+    if(ens.length > 1){
+      issues.push({type:'表名重复',msg:'中文表名 <code>'+cn+'</code> 对应多个英文表名: '+ens.map(function(e){return '<code>'+e+'</code>('+allCnToEns[cn][e]+')'}).join(' / ')});
+    }
+  }
+  // 同一英文表名对应不同中文名
+  var allEnToCns = {};
+  l4.forEach(function(e){
+    if(!e.en) return;
+    var k = e.en.toLowerCase();
+    if(!allEnToCns[k]) allEnToCns[k] = {};
+    allEnToCns[k][e.cn] = 'DB清单';
+  });
+  l5.forEach(function(a){
+    if(!a.tbl_en || !a.tbl_cn || a.tbl_en==='数据字典') return;
+    var k = a.tbl_en.toLowerCase();
+    if(!allEnToCns[k]) allEnToCns[k] = {};
+    allEnToCns[k][a.tbl_cn] = 'DB定义';
+  });
+  for(var en in allEnToCns){
+    var cns = Object.keys(allEnToCns[en]);
+    if(cns.length > 1){
+      issues.push({type:'表名重复',msg:'英文表名 <code>'+en+'</code> 对应多个中文表名: '+cns.map(function(c){return '<code>'+c+'</code>('+allEnToCns[en][c]+')'}).join(' / ')});
+    }
+  }
   // 11. 同名字段类型不一致
   var fieldTypes={}, fieldLens={};
   l5.forEach(function(a){
@@ -457,7 +745,7 @@ function renderResult() {
   var mcnN=Object.keys(state.mcn).length, menN=Object.keys(state.men).length, fmtN=state.fmt.length;
   var fmtByType={};
   state.fmt.forEach(function(f){if(!fmtByType[f.type])fmtByType[f.type]=[];fmtByType[f.type].push(f)});
-  var icons={'表名重复':'🔄','字段名重复':'🔄','类型缺长度':'📏','字段名不规范':'⚠️','表名不规范':'⚠️','空字段名':'❌','空表名':'❌','主键缺失':'🔑','类型不规范':'📋','字段类型不一致':'🔀','字段长度不一致':'📐','跨文档表名冲突':'🔗','跨文档字段类型不一致':'🔗'};
+  var icons={'表名重复':'🔄','字段名重复':'🔄','类型缺长度':'📏','字段名不规范':'⚠️','表名不规范':'⚠️','空字段名':'❌','空表名':'❌','主键缺失':'🔑','类型不规范':'📋','字段类型不一致':'🔀','字段长度不一致':'📐','跨文档表名冲突':'🔗','跨文档字段类型不一致':'🔗','表名缺失':'❓'};
 
   var html = '<div class="toolbar"><button class="btn" onclick="render()">← 重新选择文件</button><button class="btn-p btn" onclick="exportExcel()">📥 导出校验报告 Excel</button></div>';
   // 统计
@@ -467,6 +755,8 @@ function renderResult() {
   html += '<div class="stat"><div class="val" style="color:var(--w)">'+(mcnN+menN)+'</div><div class="label">命名问题</div></div>';
   html += '<div class="stat"><div class="val" style="color:var(--d)">'+fmtN+'</div><div class="label">格式问题</div></div>';
   html += '<div class="stat"><div class="val">'+state.changes.length+'</div><div class="label">需修改行</div></div>';
+  var revCount = (state.revisions || []).length;
+  if (revCount > 0) html += '<div class="stat"><div class="val" style="color:var(--p)">'+revCount+'</div><div class="label">修订标记</div></div>';
   html += '</div>';
 
   // 格式校验
@@ -484,27 +774,45 @@ function renderResult() {
 
   // 命名规范
   html += '<div class="naming-grid">';
-  html += '<div class="naming-card"><div class="n-hd">⚠️ 一词多义（同英文多中文）<span class="badge" style="margin-left:6px;background:var(--d)">'+mcnN+'</span></div><div class="n-bd">';
+  html += '<div class="naming-card"><div class="n-hd">⚠️ 一词多义（同英文多中文）<span class="badge" style="margin-left:6px;background:var(--d)">'+mcnN+'</span></div><div class="n-bd" style="max-height:400px">';
   if (mcnN) {
     var keys=Object.keys(state.mcn);
-    keys.slice(0,20).forEach(function(en){
+    keys.forEach(function(en){
       var cns=state.mcn[en],vals=Object.keys(cns),best=vals.reduce(function(a,b){return cns[a]>cns[b]?a:b});
       html+='<div class="naming-item"><span class="en">'+en+'</span> → '+vals.join(' / ')+'<div class="fix">✓ 建议: '+best+'</div></div>';
     });
-    if(keys.length>20) html+='<div style="color:var(--text3);padding:4px 0">...共 '+keys.length+' 个</div>';
   } else html+='<div class="empty">✅ 无问题</div>';
   html += '</div></div>';
 
-  html += '<div class="naming-card"><div class="n-hd">⚠️ 一义多词（同中文多英文）<span class="badge" style="margin-left:6px;background:var(--d)">'+menN+'</span></div><div class="n-bd">';
+  html += '<div class="naming-card"><div class="n-hd">⚠️ 一义多词（同中文多英文）<span class="badge" style="margin-left:6px;background:var(--d)">'+menN+'</span></div><div class="n-bd" style="max-height:400px">';
   if (menN) {
     var keys=Object.keys(state.men);
-    keys.slice(0,20).forEach(function(cn){
+    keys.forEach(function(cn){
       var ens=state.men[cn],vals=Object.keys(ens),best=vals.reduce(function(a,b){return ens[a]>ens[b]?a:b});
       html+='<div class="naming-item"><span class="en">'+cn+'</span> → '+vals.join(' / ')+'<div class="fix">✓ 建议: '+best+'</div></div>';
     });
-    if(keys.length>20) html+='<div style="color:var(--text3);padding:4px 0">...共 '+keys.length+' 个</div>';
   } else html+='<div class="empty">✅ 无问题</div>';
   html += '</div></div></div>';
+
+  // 修订标记（Track Changes）
+  var revs = state.revisions || [];
+  if (revs.length > 0) {
+    // 按作者统计
+    var revAuthors = {};
+    revs.forEach(function(r) { revAuthors[r.author] = (revAuthors[r.author] || 0) + 1; });
+    var authorSummary = Object.keys(revAuthors).map(function(a) { return a + '(' + revAuthors[a] + '处)'; }).join('、');
+    // 过滤掉太短的碎片
+    var meaningfulRevs = revs.filter(function(r) { return r.text.length >= 2; });
+    html += '<div class="section" style="margin-top:16px"><div class="section-hd">📝 文档修订标记（Track Changes）<span class="badge" style="background:var(--p)">' + revs.length + '</span></div><div class="section-bd" style="max-height:350px">';
+    html += '<div style="padding:12px 18px;background:#fff8f0;border-bottom:1px solid var(--border);font-size:12px;color:var(--text2)">修订作者：<b style="color:var(--p)">' + authorSummary + '</b>，共 <b>' + revs.length + '</b> 处修订（插入 ' + revs.filter(function(r){return r.type==='插入'}).length + ' / 删除 ' + revs.filter(function(r){return r.type==='删除'}).length + '）</div>';
+    meaningfulRevs.slice(0, 50).forEach(function(r) {
+      var icon = r.type === '插入' ? '🟢' : '🔴';
+      var color = r.type === '插入' ? 'var(--s)' : 'var(--d)';
+      html += '<div class="issue-item">' + icon + ' <span style="color:' + color + ';font-weight:600">[' + r.type + ']</span> <b>' + r.author + '</b>：<code>' + r.text.substring(0, 80) + (r.text.length > 80 ? '...' : '') + '</code>' + (r.date ? ' <span style="color:var(--text3);font-size:10px">' + r.date.substring(0, 10) + '</span>' : '') + '</div>';
+    });
+    if (meaningfulRevs.length > 50) html += '<div class="issue-item" style="color:var(--text3)">...共 ' + meaningfulRevs.length + ' 条有效修订</div>';
+    html += '</div></div>';
+  }
 
   document.getElementById('app').innerHTML = html;
 }
@@ -551,6 +859,18 @@ function exportExcel() {
   var ws4 = XLSX.utils.aoa_to_sheet(s4);
   ws4['!cols']=[{wch:6},{wch:10},{wch:28},{wch:42},{wch:28}];
   XLSX.utils.book_append_sheet(wb, ws4, '命名规范问题');
+
+  // Sheet5: 修订标记
+  var revs = state.revisions || [];
+  if (revs.length > 0) {
+    var s5 = [['序号','类型','作者','修订内容','日期','来源文档']];
+    revs.filter(function(r){return r.text.length>=2}).forEach(function(r,i){
+      s5.push([i+1, r.type, r.author, r.text, (r.date||'').substring(0,10), r.src||'']);
+    });
+    var ws5 = XLSX.utils.aoa_to_sheet(s5);
+    ws5['!cols']=[{wch:6},{wch:6},{wch:10},{wch:60},{wch:12},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, ws5, '修订标记');
+  }
 
   var now=new Date();var ts=now.getFullYear()+String(now.getMonth()+1).padStart(2,'0')+String(now.getDate()).padStart(2,'0')+' '+String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   XLSX.writeFile(wb, (state.fname||'文档')+'_规范校验_'+ts+'.xlsx');

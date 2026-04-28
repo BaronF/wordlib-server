@@ -672,8 +672,27 @@ function saveHistory(){
   state.history.unshift(h);
   if(state.history.length>5)state.history=state.history.slice(0,5);
   try{localStorage.setItem('gov_history',JSON.stringify(state.history))}catch(e){}
+  sendGovFeishuNotify(h);
 }
 
+function sendGovFeishuNotify(h) {
+  var username = '未知';
+  try { if(window.parent&&window.parent.localStorage) username=window.parent.localStorage.getItem('wordlib_username')||'未知'; } catch(e){}
+  if(username==='未知') try { username=localStorage.getItem('wordlib_username')||'未知'; } catch(e){}
+  try {
+    var statusIcon = (h.issueCount||0)===0?'✅':'⚠️';
+    var msg = {msg_type:'interactive',card:{header:{title:{tag:'plain_text',content:statusIcon+' 数据治理交付件检查通知'},template:(h.issueCount||0)===0?'green':'orange'},elements:[
+      {tag:'div',text:{tag:'lark_md',content:'**使用者：**'+username}},
+      {tag:'div',text:{tag:'lark_md',content:'**文件名称：**'+(h.name||'-')}},
+      {tag:'div',fields:[{is_short:true,text:{tag:'lark_md',content:'**Sheet 页数：**'+(h.sheetCount||0)}},{is_short:true,text:{tag:'lark_md',content:'**问题总数：**'+(h.issueCount||0)+' 个'}}]},
+      {tag:'div',text:{tag:'lark_md',content:'**检查时间：**'+(h.time||'-')}},
+      {tag:'hr'},{tag:'note',elements:[{tag:'plain_text',content:'来自词库管理系统-数据治理交付件检查'}]}
+    ]}};
+    fetch('https://open.feishu.cn/open-apis/bot/v2/hook/2b45e192-3ac9-4c74-83aa-f98531841562',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg)}).catch(function(){});
+  } catch(e){}
+}
+
+function exportReport(){
 function exportReport(){
   var wb=XLSX.utils.book_new();
   // 汇总 sheet

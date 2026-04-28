@@ -179,6 +179,17 @@ def get_db():
             time TEXT DEFAULT (datetime('now','localtime'))
         )
     """)
+    # 词根剥离历史表
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS extract_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            root_count INTEGER DEFAULT 0,
+            field_count INTEGER DEFAULT 0,
+            result_json TEXT DEFAULT '',
+            time TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
     # 自动迁移：为 words 和 roots 表新增 deleted、deleted_time 字段
     for table in ('words', 'roots'):
         try:
@@ -351,6 +362,27 @@ KNOWN_ROOTS = {
     'upper': '上限', 'lower': '下限', 'limit': '限制',
     'previous': '上一个', 'next': '下一个', 'last': '最后',
     'first': '第一', 'second': '第二', 'third': '第三',
+    # 补充常见操作/属性词根
+    'direct': '直接', 'indirect': '间接', 'set': '设定', 'get': '获取',
+    'list': '列表', 'detail': '明细', 'dtl': '明细', 'info': '信息',
+    'apply': '申请', 'request': '请求', 'response': '响应',
+    'start': '开始', 'stop': '停止', 'begin': '开始', 'finish': '完成',
+    'success': '成功', 'fail': '失败', 'error': '错误', 'warn': '警告',
+    'local': '本地', 'remote': '远程', 'global': '全局',
+    'rebate': '返利', 'discount': '折扣', 'deduct': '扣减',
+    'dimension': '维度', 'factor': '因子', 'version': '版本',
+    'week': '周', 'daily': '日', 'monthly': '月', 'yearly': '年',
+    'price': '价格', 'tax': '税', 'profit': '利润', 'margin': '毛利',
+    'serial': '序列', 'ser': '序列', 'no': '编号', 'number': '编号',
+    'desc': '描述', 'mm': '毫米', 'kg': '千克', 'pcs': '件',
+    'avg': '平均', 'min': '最小', 'max': '最大', 'sum': '合计',
+    'plan': '计划', 'real': '实际', 'diff': '差异', 'compare': '比较',
+    'assign': '分配', 'alloc': '分配', 'split': '拆分', 'merge': '合并',
+    'approve': '审批', 'reject': '驳回', 'confirm': '确认',
+    'print': '打印', 'scan': '扫描', 'copy': '复制',
+    'attach': '附件', 'doc': '文档', 'template': '模板',
+    'notify': '通知', 'message': '消息', 'alert': '告警',
+    'sp': '特殊', 'pk': '主键', 'fk': '外键',
 }
 
 def _classify_root(root):
@@ -376,8 +408,163 @@ def _classify_root(root):
 # ========== 词根剥离与导入函数（任务 7.1） ==========
 
 def _extract_roots_from_xlsx(filepath):
-    """从 xlsx 文件剥离词根"""
+    """从 xlsx/docx 文件动态剥离词根
+    智能识别所有包含英文字段名的列，按 _ 拆分词根，反向查找中文名
+    """
     from collections import Counter
+    fname = os.path.basename(filepath).lower()
+
+    # 收集所有英文-中文字段对
+    field_pairs = set()  # (en, cn)
+
+    if fname.endswith('.docx'):
+        # docx 格式：从表格中提取字段
+        field_pairs = _extract_fields_from_docx(filepath)
+    else:
+        # xlsx 格式：智能识别列
+        field_pairs = _extract_fields_from_xlsx(filepath)
+
+    if not field_pairs:
+        return [], []
+
+    # 构建词条列表（每个字段对就是一个词条）
+    word_list = []
+    seen_words = set()
+    for en, cn in field_pairs:
+        if not en or not cn: continue
+        key = en.lower() + '|' + cn
+        if key in seen_words: continue
+        seen_words.add(key)
+        # 从英文名推断分类
+        parts = en.lower().split('_')
+        cat = '通用类'
+        for p in parts:
+            rc = _classify_root(p)
+            if rc != '通用':
+                cat = rc + '类'
+                break
+        word_list.append({
+            'cn': cn, 'en': en, 'cat': cat,
+            'roots': json.dumps([cn + '-' + cn], ensure_ascii=False),
+            'score': 0, 'abbr': '', 'cnDesc': '', 'enDesc': '',
+            'ref': '', 'status': 'draft',
+            'time': datetime.datetime.now().strftime('%Y-%m-%d')
+        })
+
+    # ========== 词性判断与词根剥离 ==========
+    # 动词→名词映射（常见动词转为对应名词形式）
+    _VERB_TO_NOUN = {
+        'calculate': 'calculation', 'approve': 'approval', 'delete': 'deletion',
+        'create': 'creation', 'update': 'update', 'modify': 'modification',
+        'submit': 'submission', 'reject': 'rejection', 'confirm': 'confirmation',
+        'check': 'check', 'verify': 'verification', 'audit': 'audit',
+        'import': 'import', 'export': 'export', 'upload': 'upload', 'download': 'download',
+        'send': 'dispatch', 'receive': 'receipt', 'transfer': 'transfer',
+        'open': 'opening', 'close': 'closure', 'lock': 'lock', 'unlock': 'unlock',
+        'add': 'addition', 'insert': 'insertion', 'remove': 'removal', 'cancel': 'cancellation',
+        'apply': 'application', 'assign': 'assignment', 'alloc': 'allocation',
+        'split': 'split', 'merge': 'merge', 'sort': 'sort', 'filter': 'filter',
+        'search': 'search', 'query': 'query', 'print': 'print', 'scan': 'scan',
+        'copy': 'copy', 'move': 'movement', 'notify': 'notification',
+        'inspect': 'inspection', 'test': 'test', 'sample': 'sample',
+        'roll': 'rolling', 'cast': 'casting', 'smelt': 'smelting', 'refine': 'refining',
+        'cool': 'cooling', 'heat': 'heat', 'anneal': 'annealing', 'quench': 'quenching',
+        'temper': 'tempering', 'pickle': 'pickling', 'normalize': 'normalizing',
+        'dispatch': 'dispatch', 'settle': 'settlement', 'deduct': 'deduction',
+        'evaluate': 'evaluation', 'compare': 'comparison',
+    }
+    # 修饰词（形容词/副词/过去分词作修饰，不作为独立词根）
+    _MODIFIERS = {
+        'deleted', 'locked', 'active', 'inactive', 'valid', 'invalid',
+        'enabled', 'disabled', 'hidden', 'visible', 'required', 'optional',
+        'primary', 'secondary', 'main', 'sub', 'old', 'new', 'prev', 'next',
+        'current', 'cur', 'last', 'first', 'upper', 'lower', 'max', 'min',
+        'total', 'actual', 'real', 'std', 'avg', 'sum', 'net', 'gross',
+        'hot', 'cold', 'raw', 'final', 'initial', 'temp', 'tmp',
+        'synced', 'pending', 'approved', 'rejected', 'completed', 'cancelled',
+        'updated', 'created', 'modified', 'submitted', 'confirmed',
+        'direct', 'indirect', 'local', 'remote', 'global', 'internal', 'external',
+        'annual', 'monthly', 'daily', 'weekly', 'yearly',
+        'blind', 'mixed', 'manual', 'auto', 'default', 'custom',
+    }
+    # 停用词
+    _STOP_WORDS = {
+        'a', 'an', 'the', 'and', 'or', 'not', 'is', 'are', 'was', 'were',
+        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+        'will', 'would', 'shall', 'should', 'may', 'might', 'can', 'could',
+        'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as',
+        'into', 'about', 'between', 'through', 'after', 'before', 'above',
+        'below', 'up', 'down', 'out', 'off', 'over', 'under', 'again',
+        'then', 'than', 'so', 'if', 'but', 'no', 'yes', 'all', 'each',
+        'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such',
+        'only', 'own', 'same', 'too', 'very', 'just', 'because', 'also',
+        'it', 'its', 'this', 'that', 'these', 'those', 'my', 'your', 'his',
+        'her', 'we', 'they', 'me', 'him', 'us', 'them', 'who', 'which',
+        'what', 'where', 'when', 'how', 'why', 'there', 'here',
+        'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+        'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+    }
+
+    def _extract_core_root(parts):
+        """从单词列表中提取核心名词词根（取最后一个名词）"""
+        nouns = []
+        for part in parts:
+            if not part or len(part) <= 1: continue
+            if part.isdigit(): continue
+            if part in _STOP_WORDS: continue
+            if part in _MODIFIERS: continue
+            # 动词转名词（动词不作为独立词根，只用转换后的名词形式）
+            if part in _VERB_TO_NOUN:
+                noun_form = _VERB_TO_NOUN[part]
+                if noun_form in KNOWN_ROOTS:
+                    nouns.append(noun_form)
+                # 动词本身不保留，跳过
+                continue
+            # 名词（在 KNOWN_ROOTS 中的）
+            if part in KNOWN_ROOTS:
+                nouns.append(part)
+        # 返回最后一个名词作为核心词根（复合词中核心实体在尾部）
+        return nouns[-1] if nouns else None
+
+    # 词根剥离：按 _ 拆分，提取核心名词词根
+    root_counter = Counter()
+    root_examples = defaultdict(set)
+
+    for en, cn in field_pairs:
+        parts = en.lower().strip().split('_')
+        # 提取核心词根
+        core = _extract_core_root(parts)
+        if core:
+            root_counter[core] += 1
+            root_examples[core].add(en)
+
+    results = []
+    for root, count in root_counter.most_common():
+        if count < 2: continue
+        cn_name = KNOWN_ROOTS.get(root, '')
+        if not cn_name: continue
+        cat = _classify_root(root)
+        results.append({
+            'name': cn_name,
+            'en': root,
+            'mean': cn_name,
+            'src': '数据资产',
+            'cat': cat,
+            'status': 'approved',
+            'examples': list(root_examples[root])[:5],
+            'count': count
+        })
+    # 标记中文名重复的词根（不去重，留给用户抉择）
+    cn_count = {}
+    for r in results:
+        cn_count[r['name']] = cn_count.get(r['name'], 0) + 1
+    for r in results:
+        r['duplicate'] = cn_count[r['name']] > 1
+    return sorted(results, key=lambda x: x['count'], reverse=True), word_list
+
+
+def _extract_fields_from_xlsx(filepath):
+    """从 xlsx 文件智能提取英文-中文字段对"""
     import zipfile
     import xml.etree.ElementTree as ET
     z = zipfile.ZipFile(filepath)
@@ -394,106 +581,166 @@ def _extract_roots_from_xlsx(filepath):
     wb_root = ET.fromstring(wb_raw)
     rels_raw = z.read('xl/_rels/workbook.xml.rels')
     rels_root = ET.fromstring(rels_raw)
-    # 找包含 "02" 或 "L5" 或 "数据资产" 的 sheet
-    target_rid = None
-    for s in wb_root.findall(f'.//{{{ns_s}}}sheet'):
-        name = s.attrib.get('name', '')
-        if '02' in name or 'L5' in name or '数据资产' in name:
-            target_rid = s.attrib.get(f'{{{ns_r}}}id')
-            break
-    if not target_rid:
-        sheets = wb_root.findall(f'.//{{{ns_s}}}sheet')
-        if sheets:
-            target_rid = sheets[0].attrib.get(f'{{{ns_r}}}id')
-    sheet_file = None
-    if target_rid:
-        for rel in rels_root:
-            if rel.attrib.get('Id') == target_rid:
-                sheet_file = 'xl/' + rel.attrib['Target']
-                break
-    if not sheet_file:
-        z.close()
-        return []
-    sheet_raw = z.read(sheet_file)
-    sheet_root = ET.fromstring(sheet_raw)
-    z.close()
-    def col_idx(col_str):
-        r = 0
-        for c in col_str:
-            r = r * 26 + (ord(c) - ord('A') + 1)
-        return r - 1
-    rows_data = {}
-    for row in sheet_root.findall(f'.//{{{ns_s}}}sheetData/{{{ns_s}}}row'):
-        rn = int(row.attrib['r'])
-        for cell in row.findall(f'{{{ns_s}}}c'):
-            ref = cell.attrib.get('r', '')
-            m = re.match(r'([A-Z]+)(\d+)', ref)
-            if not m: continue
-            ci = col_idx(m.group(1))
-            v_el = cell.find(f'{{{ns_s}}}v')
-            val = v_el.text if v_el is not None else ''
-            if cell.attrib.get('t') == 's' and val:
-                idx = int(val)
-                val = shared[idx] if idx < len(shared) else val
-            if rn not in rows_data: rows_data[rn] = {}
-            rows_data[rn][ci] = (val or '').strip()
-    # L列=11, M列=12
+
+    # 遍历所有 sheet（不再只找特定 sheet）
     field_pairs = set()
-    for rn in sorted(rows_data.keys()):
-        if rn <= 1: continue
-        row = rows_data[rn]
-        en = row.get(11, '').strip()
-        cn = row.get(12, '').strip()
-        if en and cn:
-            field_pairs.add((en, cn))
-    # 词根剥离
-    from collections import Counter as _Counter
-    root_counter = _Counter()
-    root_examples = defaultdict(set)
-    for en, cn in field_pairs:
-        parts = en.lower().strip().split('_')
-        for part in parts:
-            if part:
-                root_counter[part] += 1
-                root_examples[part].add(en)
-    # 停用词：连接词、介词、冠词等不应作为词根
-    _STOP_WORDS = {
-        'a', 'an', 'the', 'and', 'or', 'not', 'is', 'are', 'was', 'were',
-        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-        'will', 'would', 'shall', 'should', 'may', 'might', 'can', 'could',
-        'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from', 'as',
-        'into', 'about', 'between', 'through', 'after', 'before', 'above',
-        'below', 'up', 'down', 'out', 'off', 'over', 'under', 'again',
-        'then', 'than', 'so', 'if', 'but', 'no', 'yes', 'all', 'each',
-        'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such',
-        'only', 'own', 'same', 'too', 'very', 'just', 'because', 'also',
-        'it', 'its', 'this', 'that', 'these', 'those', 'my', 'your', 'his',
-        'her', 'we', 'they', 'me', 'him', 'us', 'them', 'who', 'which',
-        'what', 'where', 'when', 'how', 'why', 'there', 'here',
-        # 单字母和纯数字
-        'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-        'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-    }
-    # 过滤：只保留 KNOWN_ROOTS 中存在的词根（即有明确业务含义的词根）
-    results = []
-    for root, count in root_counter.most_common():
-        if count < 2: continue
-        if root in _STOP_WORDS: continue
-        if len(root) <= 1: continue  # 过滤单字符
-        cn_name = KNOWN_ROOTS.get(root, '')
-        if not cn_name: continue  # 只保留 KNOWN_ROOTS 中有的词根
-        cat = _classify_root(root)
-        results.append({
-            'name': cn_name or root,
-            'en': root,
-            'mean': cn_name,
-            'src': '数据资产',
-            'cat': cat,
-            'status': 'approved',
-            'examples': list(root_examples[root])[:5],
-            'count': count
-        })
-    return results
+    rel_map = {r.attrib.get('Id', ''): r.attrib.get('Target', '') for r in rels_root}
+
+    for s in wb_root.findall(f'.//{{{ns_s}}}sheet'):
+        rid = s.attrib.get(f'{{{ns_r}}}id', '')
+        target = rel_map.get(rid, '')
+        if not target: continue
+        sheet_path = 'xl/' + target if not target.startswith('/') else target.lstrip('/')
+        try:
+            sheet_raw = z.read(sheet_path)
+        except: continue
+        sheet_root = ET.fromstring(sheet_raw)
+
+        def col_idx(col_str):
+            r = 0
+            for c in col_str:
+                r = r * 26 + (ord(c) - ord('A') + 1)
+            return r - 1
+
+        rows_data = {}
+        for row in sheet_root.findall(f'.//{{{ns_s}}}sheetData/{{{ns_s}}}row'):
+            rn = int(row.attrib['r'])
+            for cell in row.findall(f'{{{ns_s}}}c'):
+                ref = cell.attrib.get('r', '')
+                m = re.match(r'([A-Z]+)(\d+)', ref)
+                if not m: continue
+                ci = col_idx(m.group(1))
+                v_el = cell.find(f'{{{ns_s}}}v')
+                val = v_el.text if v_el is not None else ''
+                if cell.attrib.get('t') == 's' and val:
+                    idx = int(val)
+                    val = shared[idx] if idx < len(shared) else val
+                if rn not in rows_data: rows_data[rn] = {}
+                rows_data[rn][ci] = (val or '').strip()
+
+        if not rows_data: continue
+
+        # 智能识别英文列和中文列
+        # 策略：找表头中包含"英文"/"字段名"的列作为英文列，相邻的"中文"列作为中文列
+        hdr_row = rows_data.get(1, {})
+        en_cols = []  # [(en_col_idx, cn_col_idx)]
+
+        for ci, val in hdr_row.items():
+            val_lower = val.lower().replace(' ', '')
+            # 识别英文字段列
+            if any(kw in val for kw in ['英文', '字段英文', '属性英文', 'English', 'Field']) and '中文' not in val:
+                # 找相邻的中文列（通常在英文列的下一列）
+                cn_ci = None
+                for offset in [1, -1, 2, -2]:
+                    neighbor = hdr_row.get(ci + offset, '')
+                    if '中文' in neighbor:
+                        cn_ci = ci + offset
+                        break
+                en_cols.append((ci, cn_ci))
+
+        # 如果没找到明确的表头，尝试自动检测：找包含下划线英文的列
+        if not en_cols:
+            # 扫描前 20 行数据，找哪些列主要包含 xxx_yyy 格式的英文
+            col_scores = defaultdict(int)
+            for rn in sorted(rows_data.keys())[:20]:
+                row = rows_data[rn]
+                for ci, val in row.items():
+                    if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*_[a-zA-Z0-9_]+$', val):
+                        col_scores[ci] += 1
+            # 得分最高的列作为英文列
+            if col_scores:
+                best_en_col = max(col_scores, key=col_scores.get)
+                if col_scores[best_en_col] >= 3:
+                    # 找相邻的中文列
+                    cn_col = None
+                    for offset in [1, -1, 2, -2]:
+                        test_col = best_en_col + offset
+                        cn_count = 0
+                        for rn in sorted(rows_data.keys())[:20]:
+                            val = rows_data.get(rn, {}).get(test_col, '')
+                            if val and re.search(r'[\u4e00-\u9fff]', val):
+                                cn_count += 1
+                        if cn_count >= 3:
+                            cn_col = test_col
+                            break
+                    en_cols.append((best_en_col, cn_col))
+
+        # 提取字段对
+        for en_ci, cn_ci in en_cols:
+            for rn in sorted(rows_data.keys()):
+                if rn <= 1: continue
+                row = rows_data[rn]
+                en = row.get(en_ci, '').strip()
+                cn = row.get(cn_ci, '').strip() if cn_ci is not None else ''
+                if en and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', en):
+                    field_pairs.add((en, cn))
+
+    z.close()
+    return field_pairs
+
+
+def _extract_fields_from_docx(filepath):
+    """从 docx 文件提取英文-中文字段对（从表格中）"""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    z = zipfile.ZipFile(filepath)
+    try:
+        doc_xml = z.read('word/document.xml')
+    except:
+        z.close()
+        return set()
+    root = ET.fromstring(doc_xml)
+    WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    body = root.find(f'{{{WNS}}}body')
+    z.close()
+    if body is None:
+        return set()
+
+    def get_accepted_text(node):
+        """提取接受修订后的文本（忽略 w:del）"""
+        text = ''
+        for child in node:
+            tag = child.tag.split('}')[1] if '}' in child.tag else child.tag
+            if tag == 'del': continue
+            if tag == 't': text += (child.text or '')
+            elif tag == 'delText': continue
+            else: text += get_accepted_text(child)
+        return text
+
+    field_pairs = set()
+    # 遍历所有表格
+    for tbl in body.findall(f'.//{{{WNS}}}tbl'):
+        rows = []
+        for tr in tbl.findall(f'{{{WNS}}}tr'):
+            cells = []
+            for tc in tr.findall(f'{{{WNS}}}tc'):
+                cells.append(get_accepted_text(tc).strip())
+            rows.append(cells)
+        if len(rows) < 2: continue
+        # 找英文列和中文列
+        hdr = rows[0]
+        en_ci, cn_ci = None, None
+        for ci, val in enumerate(hdr):
+            if '英文' in val and '中文' not in val and en_ci is None:
+                en_ci = ci
+            elif '中文' in val and cn_ci is None:
+                cn_ci = ci
+        # 如果没找到表头，尝试自动检测
+        if en_ci is None:
+            for ci, val in enumerate(hdr):
+                if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*_', val):
+                    en_ci = ci
+                    break
+        if en_ci is None: continue
+        # 提取字段对
+        for row in rows[1:]:
+            if en_ci >= len(row): continue
+            en = row[en_ci].strip()
+            cn = row[cn_ci].strip() if cn_ci is not None and cn_ci < len(row) else ''
+            if en and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', en):
+                field_pairs.add((en, cn))
+
+    return field_pairs
 
 def _import_extracted_roots(roots_list, mode='skip'):
     """将剥离结果导入 roots 表"""
@@ -844,6 +1091,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, [row_to_dict(r) for r in rows])
             return
 
+        # === 词根剥离历史API ===
+        if path == '/api/extract_history':
+            conn = get_db()
+            rows = conn.execute("SELECT id, filename, root_count, field_count, time FROM extract_history ORDER BY id DESC LIMIT 20").fetchall()
+            conn.close()
+            self._send_json(200, [row_to_dict(r) for r in rows])
+            return
+
+        if path.startswith('/api/extract_history/'):
+            hid = int(path.split('/')[-1])
+            conn = get_db()
+            row = conn.execute("SELECT * FROM extract_history WHERE id=?", (hid,)).fetchone()
+            conn.close()
+            if row:
+                d = row_to_dict(row)
+                if d.get('result_json'):
+                    try:
+                        parsed = json.loads(d['result_json'])
+                        if isinstance(parsed, dict):
+                            d['roots'] = parsed.get('roots', [])
+                            d['words'] = parsed.get('words', [])
+                        elif isinstance(parsed, list):
+                            d['roots'] = parsed
+                            d['words'] = []
+                    except: d['roots'] = []; d['words'] = []
+                del d['result_json']
+                self._send_json(200, d)
+            else:
+                self._send_json(404, {'error': '记录不存在'})
+            return
+
         # === 同义词API ===
         if path == '/api/synonyms':
             conn = get_db()
@@ -1128,6 +1406,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rows = conn.execute(f"SELECT * FROM words{w} ORDER BY id DESC", args).fetchall()
             conn.close()
             self._send_json(200, [row_to_dict(r) for r in rows])
+            return
+
+        # === 导出剥离结果为 xlsx ===
+        if path == '/api/extract_roots/export':
+            roots_list = data.get('roots', [])
+            if not roots_list:
+                self._send_json(400, {'error': '没有可导出的数据'})
+                return
+            try:
+                import xlsxwriter
+            except ImportError:
+                self._send_json(500, {'error': '缺少 xlsxwriter'})
+                return
+            buf = io.BytesIO()
+            wb = xlsxwriter.Workbook(buf)
+            hdr_fmt = wb.add_format({'bold': 1, 'bg_color': '#4472C4', 'font_color': '#FFF', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': 11})
+            cell_fmt = wb.add_format({'border': 1, 'text_wrap': 1, 'valign': 'vcenter', 'font_size': 10})
+            ws = wb.add_worksheet('词根剥离结果')
+            headers = ['序号', '词根名称', '英文', '含义', '分类', '出现次数', '示例']
+            for c, h in enumerate(headers):
+                ws.write(0, c, h, hdr_fmt)
+            for i, r in enumerate(roots_list):
+                ex = r.get('examples', [])
+                if isinstance(ex, list): ex = '、'.join(ex)
+                ws.write(i+1, 0, i+1, cell_fmt)
+                ws.write(i+1, 1, r.get('name', ''), cell_fmt)
+                ws.write(i+1, 2, r.get('en', ''), cell_fmt)
+                ws.write(i+1, 3, r.get('mean', ''), cell_fmt)
+                ws.write(i+1, 4, r.get('cat', ''), cell_fmt)
+                ws.write(i+1, 5, r.get('count', 0), cell_fmt)
+                ws.write(i+1, 6, ex, cell_fmt)
+            for c, w in enumerate([6, 14, 14, 20, 10, 10, 40]):
+                ws.set_column(c, c, w)
+            ws.autofilter(0, 0, len(roots_list), 6)
+            ws.freeze_panes(1, 0)
+            wb.close()
+            excel_bytes = buf.getvalue()
+            self.send_response(200)
+            self._cors()
+            self.send_header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            self.send_header('Content-Disposition', 'attachment; filename="roots_export.xlsx"')
+            self.send_header('Content-Length', str(len(excel_bytes)))
+            self.end_headers()
+            self.wfile.write(excel_bytes)
             return
 
         # === 导入词根API ===
@@ -1430,19 +1752,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {'error': '未找到上传文件'})
             return
 
-        if not fname.lower().endswith('.xlsx'):
-            self._send_json(400, {'error': '仅支持 xlsx 格式文件'})
+        if not (fname.lower().endswith('.xlsx') or fname.lower().endswith('.docx')):
+            self._send_json(400, {'error': '仅支持 xlsx 和 docx 格式文件'})
             return
 
         import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        suffix = '.docx' if fname.lower().endswith('.docx') else '.xlsx'
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
         tmp.write(file_data)
         tmp.close()
 
         try:
-            results = _extract_roots_from_xlsx(tmp.name)
-            self._log_op('词根剥离', f'{fname} → 剥离出 {len(results)} 个词根')
-            self._send_json(200, {'roots': results, 'count': len(results)})
+            results, word_list = _extract_roots_from_xlsx(tmp.name)
+            self._log_op('词根剥离', f'{fname} → 剥离出 {len(results)} 个词根, {len(word_list)} 个词条')
+            # 保存剥离历史
+            try:
+                conn = get_db()
+                conn.execute("INSERT INTO extract_history(filename, root_count, field_count, result_json) VALUES(?,?,?,?)",
+                    (fname, len(results), len(word_list),
+                     json.dumps({'roots': results, 'words': word_list}, ensure_ascii=False)))
+                conn.commit()
+                conn.close()
+            except: pass
+            self._send_json(200, {'roots': results, 'words': word_list, 'count': len(results), 'wordCount': len(word_list)})
         except Exception as e:
             self._send_json(500, {'error': str(e)})
         finally:

@@ -298,6 +298,7 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <span id="batchSelectedCount" style="font-size:12px;color:var(--text3)">已选 0 条</span>
         <button class="btn success" style="padding:5px 14px;font-size:12px" onclick="batchApprove('approved')">✅ 批量通过</button>
         <button class="btn danger" style="padding:5px 14px;font-size:12px" onclick="batchApprove('rejected')">❌ 批量驳回</button>
+        <button class="btn" style="padding:5px 14px;font-size:12px;background:var(--primary);color:#fff;border:none" onclick="batchApproveAll()">🚀 一键全部发布</button>
         <span style="flex:1"></span>
         <button class="btn ghost" style="padding:5px 14px;font-size:12px" onclick="showImportLogs()">📋 导入日志</button>
       </div>
@@ -361,9 +362,9 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
       <h3 style="font-size:15px;margin-bottom:16px;color:var(--text)">📤 上传 Excel 文件</h3>
       <div style="border:2px dashed var(--border);border-radius:12px;padding:36px;text-align:center;cursor:pointer;transition:all .2s" onclick="document.getElementById('extractFileInput').click()" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
         <div style="font-size:36px;margin-bottom:8px">📄</div>
-        <div style="font-size:14px;font-weight:600;color:var(--text)">点击选择 xlsx 文件</div>
-        <div style="font-size:12px;color:var(--text3);margin-top:4px">系统将自动从文件中剥离词根</div>
-        <input type="file" id="extractFileInput" accept=".xlsx" style="display:none" onchange="doExtractRoots(this)">
+        <div style="font-size:14px;font-weight:600;color:var(--text)">点击选择文件</div>
+        <div style="font-size:12px;color:var(--text3);margin-top:4px">支持 .xlsx / .docx 格式，系统将自动识别字段列并剥离词根</div>
+        <input type="file" id="extractFileInput" accept=".xlsx,.docx" style="display:none" onchange="doExtractRoots(this)">
       </div>
     </div>
     <div id="extractLoading" style="display:none;text-align:center;padding:40px"><div style="font-size:32px;animation:spin 1s linear infinite;display:inline-block">⏳</div><div style="margin-top:8px;color:var(--text3)">正在剥离词根...</div></div>
@@ -371,18 +372,22 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
       <div class="form-card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
           <h3 style="font-size:15px;color:var(--text)">📋 剥离结果预览</h3>
-          <div style="display:flex;gap:8px">
-            <select id="extractMode" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg3);color:var(--text);font-size:12px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn ghost" style="padding:7px 18px;font-size:13px" onclick="document.getElementById('extractResult').style.display='none';loadExtractHistory()">← 返回</button>
+            <select id="extractMode" class="admin-only-root" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg3);color:var(--text);font-size:12px">
               <option value="skip">跳过已存在</option>
               <option value="merge">合并更新</option>
             </select>
-            <button class="btn primary" style="padding:7px 18px;font-size:13px" onclick="doImportExtractedRoots()">✅ 确认导入</button>
+            <button class="btn primary admin-only-root" style="padding:7px 18px;font-size:13px" onclick="doImportExtractedRoots()">✅ 导入词根</button>
+            <button class="btn admin-only-root" style="padding:7px 18px;font-size:13px;background:#16a34a;color:#fff;border:none" onclick="doImportExtractedWords()">📚 导入词条</button>
+            <button class="btn" style="padding:7px 18px;font-size:13px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)" onclick="exportExtractedRoots()">📤 导出 Excel</button>
           </div>
         </div>
         <div id="extractPreviewList" style="max-height:500px;overflow-y:auto"></div>
       </div>
     </div>
     <div id="extractImportResult" style="display:none"></div>
+    <div id="extractHistory" style="margin-top:16px"></div>
   </div>
 
   <!-- 统计报表 -->
@@ -619,85 +624,13 @@ async function checkSession() {
 }
 
 // ===== 词条数据 =====
-var words = [
-  {id:1,cn:'时间',en:'time',cat:'时间类',roots:'["时间-时间"]',score:52.37,abbr:'含HH:mm:ss',cnDesc:'日期时间类型字段',enDesc:'Date time field',ref:'',status:'approved',time:'2025-03-10'},
-  {id:2,cn:'警告时间',en:'warn_time',cat:'通用类',roots:'["警告时间-警告时间"]',score:45.89,abbr:'warn_time',cnDesc:'系统告警触发时间',enDesc:'Warning trigger time',ref:'t_sys_alarm',status:'approved',time:'2025-03-10'},
-  {id:3,cn:'入库时间',en:'in_warehouse_time',cat:'通用类',roots:'["入库时间-入库时间","入库, 时间"]',score:45.77,abbr:'inwh_time',cnDesc:'物料入库登记时间',enDesc:'Warehouse receipt time',ref:'t_inventory',status:'approved',time:'2025-03-10'},
-  {id:4,cn:'出库时间',en:'out_warehouse_time',cat:'通用类',roots:'["出库时间-出库时间","出库, 时间"]',score:45.77,abbr:'outwh_time',cnDesc:'物料出库登记时间',enDesc:'Warehouse issue time',ref:'t_inventory',status:'approved',time:'2025-03-10'},
-  {id:5,cn:'作业时间',en:'work_time',cat:'通用类',roots:'["作业时间-作业时间","运行时间"]',score:45.64,abbr:'',cnDesc:'工序作业执行时间',enDesc:'Operation work time',ref:'t_work_order',status:'approved',time:'2025-03-10'},
-  {id:6,cn:'连浇时间',en:'continuous_casting_time',cat:'钢铁类',roots:'["连浇时间-连浇时间"]',score:45.25,abbr:'',cnDesc:'连铸工序连续浇铸持续时间',enDesc:'Continuous casting duration',ref:'t_cc_heat',status:'approved',time:'2025-03-10'},
-  {id:7,cn:'综判时间',en:'comprehensive_review_time',cat:'钢铁类',roots:'["综判时间-综判时间"]',score:45.25,abbr:'',cnDesc:'质量综合判定时间戳',enDesc:'Quality review timestamp',ref:'t_quality',status:'approved',time:'2025-03-10'},
-  {id:8,cn:'炉号',en:'furnace_no',cat:'钢铁类',roots:'["炉号-炉号"]',score:48.12,abbr:'',cnDesc:'炼钢炉次唯一编号',enDesc:'Furnace heat number',ref:'t_steel_heat',status:'approved',time:'2025-03-09'},
-  {id:9,cn:'钢种',en:'steel_grade',cat:'钢铁类',roots:'["钢种-钢种"]',score:47.88,abbr:'',cnDesc:'钢材品种牌号代码',enDesc:'Steel grade code',ref:'t_steel_grade',status:'approved',time:'2025-03-09'},
-  {id:10,cn:'钢种代码',en:'steel_grade_code',cat:'钢铁类',roots:'["钢种-钢种","代码-代码"]',score:46.50,abbr:'',cnDesc:'钢种对应的标准编码',enDesc:'Steel grade standard code',ref:'t_steel_grade',status:'approved',time:'2025-03-09'},
-  {id:11,cn:'炉次',en:'heat_no',cat:'钢铁类',roots:'["炉次-炉次"]',score:47.50,abbr:'',cnDesc:'一次冶炼过程的编号',enDesc:'Heat sequence number',ref:'t_steel_heat',status:'approved',time:'2025-03-09'},
-  {id:12,cn:'浇次',en:'cast_no',cat:'钢铁类',roots:'["浇次-浇次"]',score:46.80,abbr:'',cnDesc:'连铸浇铸批次编号',enDesc:'Cast sequence number',ref:'t_cc_cast',status:'approved',time:'2025-03-09'},
-  {id:13,cn:'铸坯号',en:'slab_no',cat:'钢铁类',roots:'["铸坯-铸坯","号-号"]',score:46.20,abbr:'',cnDesc:'连铸产出铸坯编号',enDesc:'Slab number',ref:'t_cc_slab',status:'approved',time:'2025-03-08'},
-  {id:14,cn:'钢包号',en:'ladle_no',cat:'钢铁类',roots:'["钢包-钢包","号-号"]',score:45.90,abbr:'',cnDesc:'盛钢容器编号',enDesc:'Ladle number',ref:'t_ladle',status:'approved',time:'2025-03-08'},
-  {id:15,cn:'中间包号',en:'tundish_no',cat:'钢铁类',roots:'["中间包-中间包","号-号"]',score:45.60,abbr:'',cnDesc:'连铸中间包编号',enDesc:'Tundish number',ref:'t_tundish',status:'approved',time:'2025-03-08'},
-  {id:16,cn:'出钢温度',en:'tapping_temperature',cat:'钢铁类',roots:'["出钢-出钢","温度-温度"]',score:47.30,abbr:'℃',cnDesc:'转炉出钢时钢水温度',enDesc:'Tapping temperature',ref:'t_converter',status:'approved',time:'2025-03-08'},
-  {id:17,cn:'钢水重量',en:'molten_steel_weight',cat:'钢铁类',roots:'["钢水-钢水","重量-重量"]',score:46.90,abbr:'吨',cnDesc:'一炉钢水的总重量',enDesc:'Molten steel weight',ref:'t_steel_heat',status:'approved',time:'2025-03-08'},
-  {id:18,cn:'拉速',en:'casting_speed',cat:'钢铁类',roots:'["拉速-拉速"]',score:46.50,abbr:'m/min',cnDesc:'连铸拉坯速度',enDesc:'Casting speed',ref:'t_cc_process',status:'approved',time:'2025-03-07'},
-  {id:19,cn:'过热度',en:'superheat',cat:'钢铁类',roots:'["过热度-过热度"]',score:45.80,abbr:'℃',cnDesc:'钢水温度与液相线温度之差',enDesc:'Superheat degree',ref:'t_cc_process',status:'approved',time:'2025-03-07'},
-  {id:20,cn:'轧制力',en:'rolling_force',cat:'钢铁类',roots:'["轧制-轧制","力-力"]',score:45.40,abbr:'kN',cnDesc:'轧机轧制时的压力值',enDesc:'Rolling force',ref:'t_rolling',status:'approved',time:'2025-03-07'},
-  {id:21,cn:'轧制温度',en:'rolling_temperature',cat:'钢铁类',roots:'["轧制-轧制","温度-温度"]',score:45.20,abbr:'℃',cnDesc:'轧制过程中的钢材温度',enDesc:'Rolling temperature',ref:'t_rolling',status:'approved',time:'2025-03-07'},
-  {id:22,cn:'终轧温度',en:'finish_rolling_temp',cat:'钢铁类',roots:'["终轧-终轧","温度-温度"]',score:45.10,abbr:'℃',cnDesc:'精轧最后一道次出口温度',enDesc:'Finish rolling temperature',ref:'t_rolling',status:'approved',time:'2025-03-07'},
-  {id:23,cn:'卷取温度',en:'coiling_temperature',cat:'钢铁类',roots:'["卷取-卷取","温度-温度"]',score:44.90,abbr:'℃',cnDesc:'热轧卷取时的钢带温度',enDesc:'Coiling temperature',ref:'t_rolling',status:'approved',time:'2025-03-07'},
-  {id:24,cn:'班组',en:'team',cat:'人员类',roots:'["班组-班组"]',score:44.50,abbr:'',cnDesc:'生产作业班组名称',enDesc:'Production team',ref:'t_team',status:'approved',time:'2025-03-06'},
-  {id:25,cn:'工号',en:'employee_no',cat:'人员类',roots:'["工号-工号"]',score:43.20,abbr:'',cnDesc:'员工唯一工号编码',enDesc:'Employee number',ref:'t_employee',status:'approved',time:'2025-03-06'},
-  {id:26,cn:'设备编号',en:'equipment_no',cat:'设备类',roots:'["设备-设备","编号-编号"]',score:46.10,abbr:'',cnDesc:'设备资产唯一标识编号',enDesc:'Equipment number',ref:'t_equipment',status:'approved',time:'2025-03-06'},
-  {id:27,cn:'设备名称',en:'equipment_name',cat:'设备类',roots:'["设备-设备","名称-名称"]',score:45.80,abbr:'',cnDesc:'设备的中文名称',enDesc:'Equipment name',ref:'t_equipment',status:'approved',time:'2025-03-06'},
-  {id:28,cn:'成本中心',en:'cost_center',cat:'财务类',roots:'["成本-成本","中心-中心"]',score:44.80,abbr:'',cnDesc:'财务核算归属单元',enDesc:'Cost center',ref:'t_cost_center',status:'approved',time:'2025-03-06'},
-  {id:29,cn:'计量单位',en:'unit_of_measure',cat:'通用类',roots:'["计量-计量","单位-单位"]',score:43.90,abbr:'UOM',cnDesc:'度量衡标准单位',enDesc:'Unit of measure',ref:'t_uom',status:'approved',time:'2025-03-06'},
-  {id:30,cn:'铁水温度',en:'hot_metal_temperature',cat:'钢铁类',roots:'["铁水-铁水","温度-温度"]',score:46.70,abbr:'℃',cnDesc:'高炉出铁时铁水温度',enDesc:'Hot metal temperature',ref:'t_blast_furnace',status:'approved',time:'2025-03-05'},
-  {id:31,cn:'铁水成分',en:'hot_metal_composition',cat:'钢铁类',roots:'["铁水-铁水","成分-成分"]',score:46.30,abbr:'',cnDesc:'铁水化学成分含量',enDesc:'Hot metal chemical composition',ref:'t_blast_furnace',status:'approved',time:'2025-03-05'},
-  {id:32,cn:'废钢比',en:'scrap_ratio',cat:'钢铁类',roots:'["废钢-废钢","比-比"]',score:44.60,abbr:'%',cnDesc:'转炉冶炼中废钢占比',enDesc:'Scrap steel ratio',ref:'t_converter',status:'approved',time:'2025-03-05'},
-  {id:33,cn:'合金加入量',en:'alloy_addition',cat:'钢铁类',roots:'["合金-合金","加入量-加入量"]',score:44.20,abbr:'kg',cnDesc:'精炼过程合金添加量',enDesc:'Alloy addition amount',ref:'t_refining',status:'approved',time:'2025-03-05'},
-  {id:34,cn:'吹氩时间',en:'argon_blowing_time',cat:'钢铁类',roots:'["吹氩-吹氩","时间-时间"]',score:44.00,abbr:'min',cnDesc:'钢包吹氩搅拌时间',enDesc:'Argon blowing duration',ref:'t_refining',status:'approved',time:'2025-03-05'},
-  {id:35,cn:'脱硫率',en:'desulfurization_rate',cat:'钢铁类',roots:'["脱硫-脱硫","率-率"]',score:43.80,abbr:'%',cnDesc:'铁水预处理脱硫效率',enDesc:'Desulfurization rate',ref:'t_pretreatment',status:'approved',time:'2025-03-04'},
-  {id:36,cn:'氧含量',en:'oxygen_content',cat:'钢铁类',roots:'["氧-氧","含量-含量"]',score:43.50,abbr:'ppm',cnDesc:'钢水中溶解氧含量',enDesc:'Dissolved oxygen content',ref:'t_steel_heat',status:'approved',time:'2025-03-04'},
-  {id:37,cn:'碳含量',en:'carbon_content',cat:'钢铁类',roots:'["碳-碳","含量-含量"]',score:43.40,abbr:'%',cnDesc:'钢水中碳元素含量',enDesc:'Carbon content',ref:'t_steel_heat',status:'approved',time:'2025-03-04'},
-  {id:38,cn:'产线编号',en:'production_line_no',cat:'设备类',roots:'["产线-产线","编号-编号"]',score:44.50,abbr:'',cnDesc:'生产线唯一编号',enDesc:'Production line number',ref:'t_prod_line',status:'approved',time:'2025-03-04'},
-  {id:39,cn:'工序代码',en:'process_code',cat:'通用类',roots:'["工序-工序","代码-代码"]',score:44.10,abbr:'',cnDesc:'生产工序标准编码',enDesc:'Process code',ref:'t_process',status:'approved',time:'2025-03-04'},
-  {id:40,cn:'质量等级',en:'quality_grade',cat:'钢铁类',roots:'["质量-质量","等级-等级"]',score:43.60,abbr:'',cnDesc:'产品质量判定等级',enDesc:'Quality grade',ref:'t_quality',status:'approved',time:'2025-03-03'}
-];
-var nextId = 41;
+var words = [];
+var nextId = 1;
 var isAdmin = false;
 
 // ===== 词根数据 =====
-var roots = [
-  {id:1,name:'时间',en:'time',mean:'时间、时刻',src:'通用',cat:'时间',status:'approved',examples:['入库时间','出库时间','作业时间','连浇时间','吹氩时间']},
-  {id:2,name:'日期',en:'date',mean:'日期、天',src:'通用',cat:'时间',status:'approved',examples:['生产日期','入库日期','交货日期']},
-  {id:3,name:'号',en:'no/number',mean:'编号、号码',src:'通用',cat:'标识',status:'approved',examples:['炉号','浇次','铸坯号','钢包号','工号']},
-  {id:4,name:'代码',en:'code',mean:'编码、代号',src:'通用',cat:'标识',status:'approved',examples:['钢种代码','工序代码','产线代码']},
-  {id:5,name:'名称',en:'name',mean:'名字、称谓',src:'通用',cat:'标识',status:'approved',examples:['设备名称','钢种名称','工序名称']},
-  {id:6,name:'温度',en:'temperature/temp',mean:'温度值',src:'物理',cat:'属性',status:'approved',examples:['出钢温度','铁水温度','轧制温度','终轧温度','卷取温度']},
-  {id:7,name:'重量',en:'weight',mean:'质量、重量',src:'物理',cat:'数量',status:'approved',examples:['钢水重量','铸坯重量','成品重量']},
-  {id:8,name:'速度',en:'speed',mean:'速率',src:'物理',cat:'属性',status:'approved',examples:['拉速','轧制速度','运输速度']},
-  {id:9,name:'含量',en:'content',mean:'成分含量',src:'化学',cat:'质量',status:'approved',examples:['氧含量','碳含量','硫含量','磷含量']},
-  {id:10,name:'率',en:'rate/ratio',mean:'比率、效率',src:'通用',cat:'数量',status:'approved',examples:['脱硫率','废钢比','合格率','成材率']},
-  {id:11,name:'量',en:'amount/quantity',mean:'数量、用量',src:'通用',cat:'数量',status:'approved',examples:['合金加入量','用水量','产量']},
-  {id:12,name:'力',en:'force',mean:'力、压力',src:'物理',cat:'属性',status:'approved',examples:['轧制力','拉矫力','弯辊力']},
-  {id:13,name:'钢',en:'steel',mean:'钢铁',src:'冶金',cat:'物料',status:'approved',examples:['钢种','钢水','钢包','废钢比']},
-  {id:14,name:'铁',en:'iron',mean:'铁、生铁',src:'冶金',cat:'物料',status:'approved',examples:['铁水温度','铁水成分','铁水重量']},
-  {id:15,name:'炉',en:'furnace',mean:'冶炼炉',src:'冶金',cat:'设备',status:'approved',examples:['炉号','炉次','转炉','高炉']},
-  {id:16,name:'轧',en:'rolling',mean:'轧制',src:'冶金',cat:'操作',status:'approved',examples:['轧制力','轧制温度','终轧温度','热轧','冷轧']},
-  {id:17,name:'铸',en:'cast',mean:'铸造、浇铸',src:'冶金',cat:'操作',status:'approved',examples:['铸坯号','浇次','连铸','铸坯']},
-  {id:18,name:'设备',en:'equipment',mean:'机器设备',src:'通用',cat:'设备',status:'approved',examples:['设备编号','设备名称','设备状态']},
-  {id:19,name:'班组',en:'team',mean:'作业班组',src:'通用',cat:'组织',status:'approved',examples:['班组','班次','当班人员']},
-  {id:20,name:'成本',en:'cost',mean:'费用、成本',src:'财务',cat:'财务',status:'approved',examples:['成本中心','生产成本','能源成本']},
-  {id:21,name:'状态',en:'status',mean:'状态、情况',src:'通用',cat:'状态',status:'approved',examples:['设备状态','订单状态','审核状态']},
-  {id:22,name:'类型',en:'type',mean:'种类、类别',src:'通用',cat:'标识',status:'approved',examples:['钢种类型','设备类型','工序类型']},
-  {id:23,name:'位置',en:'position/location',mean:'位置、方位',src:'通用',cat:'位置',status:'approved',examples:['流号位置','测温位置','取样位置']},
-  {id:24,name:'过热度',en:'superheat',mean:'超过液相线的温度',src:'冶金',cat:'质量',status:'approved',examples:['过热度','中间包过热度']},
-  {id:25,name:'计量',en:'measure',mean:'度量、计量',src:'通用',cat:'数量',status:'approved',examples:['计量单位','计量方式']},
-  {id:26,name:'工序',en:'process',mean:'生产工序',src:'通用',cat:'操作',status:'approved',examples:['工序代码','工序名称','前工序']},
-  {id:27,name:'产线',en:'line',mean:'生产线',src:'通用',cat:'设备',status:'approved',examples:['产线编号','产线名称']},
-  {id:28,name:'质量',en:'quality',mean:'品质、质量',src:'通用',cat:'质量',status:'approved',examples:['质量等级','质量判定','综判时间']},
-  {id:29,name:'入库',en:'warehouse_in',mean:'入库、收货',src:'物流',cat:'操作',status:'approved',examples:['入库时间','入库数量','入库单号']},
-  {id:30,name:'出库',en:'warehouse_out',mean:'出库、发货',src:'物流',cat:'操作',status:'approved',examples:['出库时间','出库数量','出库单号']}
-];
-var nextRootId = 31;
+var roots = [];
+var nextRootId = 1;
 var ROOT_STORAGE_KEY = 'wordlib_roots';
 var API_BASE = window.location.protocol.startsWith('http') ? window.location.origin : 'http://localhost:8080';
 
@@ -909,6 +842,35 @@ function switchTab(t) {
   if (t === 'audit') renderAudit();
   if (t === 'recycle') loadRecycleBin();
   if (t === 'report') loadReport();
+  if (t === 'extract') loadExtractHistory();
+  // 更新顶部统计文字
+  updateStatText(t);
+}
+
+function updateStatText(tab) {
+  var el = document.getElementById('statText');
+  if (!el) return;
+  if (tab === 'roots') {
+    var approvedRoots = roots.filter(function(r) { return r.status === 'approved'; }).length;
+    el.textContent = '共 ' + approvedRoots + ' 个词根';
+  } else if (tab === 'list') {
+    var approvedWords = words.filter(function(w) { return w.status === 'approved'; }).length;
+    el.textContent = '共 ' + approvedWords + ' 个词条';
+  } else if (tab === 'audit') {
+    var pending = words.filter(function(w) { return w.status === 'pending' || w.status === 'draft'; }).length;
+    var rootPending = roots.filter(function(r) { return r.status === 'pending' || r.status === 'draft'; }).length;
+    el.textContent = '待审核 ' + (pending + rootPending) + ' 条';
+  } else if (tab === 'recycle') {
+    el.textContent = '回收站';
+  } else if (tab === 'report') {
+    el.textContent = '统计报表';
+  } else if (tab === 'extract') {
+    el.textContent = '词根剥离';
+  } else if (tab === 'add') {
+    el.textContent = '新增词条';
+  } else {
+    el.textContent = '共 ' + words.length + ' 条数据';
+  }
 }
 
 // ===== 快捷筛选 =====
@@ -2629,7 +2591,10 @@ function renderRoots() {
   // 统计每个词根关联的词条数
   list.forEach(function(r) {
     var relCount = words.filter(function(w) {
-      return w.status === 'approved' && ((w.roots||'').indexOf(r.name) !== -1 || (w.cn||'').indexOf(r.name) !== -1);
+      if (w.status !== 'approved') return false;
+      // 只按英文名关联：词条英文名按 _ 拆分后包含词根英文名
+      var parts = (w.en || '').toLowerCase().split('_');
+      return parts.indexOf(r.en.toLowerCase()) >= 0;
     }).length;
     var adminBtns = isAdmin ? '<div class="rcard-actions">' +
       '<span style="cursor:pointer;font-size:13px;padding:4px 8px;border-radius:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);transition:all .2s" onclick="event.stopPropagation();showRootEditor('+r.id+')" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.color=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--text2)\'" title="编辑">✏️</span>' +
@@ -2695,9 +2660,11 @@ function copyRoot(id) {
 function showRootDetail(id) {
   var r = roots.find(function(x) { return x.id === id; });
   if (!r) return;
-  // 查找关联词条
+  // 查找关联词条（只按英文名关联）
   var relWords = words.filter(function(w) {
-    return w.status === 'approved' && ((w.roots||'').indexOf(r.name) !== -1 || (w.cn||'').indexOf(r.name) !== -1);
+    if (w.status !== 'approved') return false;
+    var parts = (w.en || '').toLowerCase().split('_');
+    return parts.indexOf(r.en.toLowerCase()) >= 0;
   });
   var overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:10000;display:grid;place-items:center;backdrop-filter:blur(4px)';
@@ -3188,6 +3155,50 @@ function showVersionDiff(vid) {
 
 // ========== 词根剥离模块 ==========
 var extractedRoots = [];
+var extractedWords = [];
+
+function loadExtractHistory() {
+  authFetch('/api/extract_history').then(function(r) { return r.json(); }).then(function(data) {
+    var list = data || [];
+    var el = document.getElementById('extractHistory');
+    if (!list.length) { el.innerHTML = ''; return; }
+    var html = '<div class="form-card"><h3 style="font-size:15px;margin-bottom:12px;color:var(--text)">📋 剥离历史记录</h3>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:2px solid var(--border)">' +
+      '<th style="text-align:left;padding:8px;color:var(--text3)">文件名</th>' +
+      '<th style="text-align:center;padding:8px;color:var(--text3)">词根数</th>' +
+      '<th style="text-align:center;padding:8px;color:var(--text3)">字段数</th>' +
+      '<th style="text-align:left;padding:8px;color:var(--text3)">时间</th>' +
+      '<th style="text-align:center;padding:8px;color:var(--text3)">操作</th>' +
+      '</tr></thead><tbody>';
+    list.forEach(function(h) {
+      html += '<tr style="border-bottom:1px solid var(--border)">' +
+        '<td style="padding:6px 8px;color:var(--primary);font-weight:600">' + (h.filename || '-') + '</td>' +
+        '<td style="padding:6px 8px;text-align:center;font-weight:600;color:var(--primary)">' + (h.root_count || 0) + '</td>' +
+        '<td style="padding:6px 8px;text-align:center;color:var(--text2)">' + (h.field_count || 0) + '</td>' +
+        '<td style="padding:6px 8px;color:var(--text3)">' + (h.time || '-') + '</td>' +
+        '<td style="padding:6px 8px;text-align:center"><span style="cursor:pointer;color:var(--primary);font-size:12px" onclick="loadExtractHistoryDetail(' + h.id + ')">查看</span></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  }).catch(function() {});
+}
+
+function loadExtractHistoryDetail(id) {
+  authFetch('/api/extract_history/' + id).then(function(r) { return r.json(); }).then(function(data) {
+    var roots = data.roots || [];
+    var words = data.words || [];
+    if (roots.length) {
+      extractedRoots = roots;
+      extractedWords = words;
+      renderExtractPreview();
+      document.getElementById('extractResult').style.display = 'block';
+      showToast('已加载历史记录：' + (data.filename || '') + '，' + roots.length + ' 个词根, ' + words.length + ' 个词条', 'var(--primary)');
+    } else {
+      showToast('该记录无数据', '#ef4444');
+    }
+  }).catch(function(e) { showToast('加载失败：' + e.message, '#ef4444'); });
+}
 
 function doExtractRoots(input) {
   var file = input.files[0];
@@ -3203,6 +3214,7 @@ function doExtractRoots(input) {
       document.getElementById('extractLoading').style.display = 'none';
       if (data.error) { showToast('剥离失败：' + data.error, '#ef4444'); return; }
       extractedRoots = data.roots || data || [];
+      extractedWords = data.words || [];
       renderExtractPreview();
     })
     .catch(function(e) {
@@ -3221,18 +3233,83 @@ function renderExtractPreview() {
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">分类</th>' +
     '<th style="text-align:center;padding:8px;color:var(--text3);font-size:11px">出现次数</th>' +
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">示例</th>' +
+    '<th style="text-align:center;padding:8px;color:var(--text3);font-size:11px">操作</th>' +
     '</tr></thead><tbody>';
-  extractedRoots.forEach(function(r) {
-    html += '<tr style="border-bottom:1px solid var(--border)">' +
-      '<td style="padding:8px;font-weight:600;color:var(--primary)">' + (r.name || '-') + '</td>' +
+  extractedRoots.forEach(function(r, idx) {
+    var isDup = r.duplicate;
+    var rowStyle = isDup ? 'border-bottom:1px solid var(--border);background:rgba(239,68,68,.08)' : 'border-bottom:1px solid var(--border)';
+    var nameColor = isDup ? '#ef4444' : 'var(--primary)';
+    var dupTag = isDup ? ' <span style="font-size:10px;color:#ef4444;font-weight:400">⚠重复</span>' : '';
+    var actionHtml = '';
+    if (isDup) {
+      actionHtml = '<div style="display:flex;gap:6px;justify-content:center">' +
+        '<span style="cursor:pointer;color:var(--primary);font-size:12px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;white-space:nowrap" onclick="editExtractedRoot('+idx+')" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\'">✏️ 编辑</span>' +
+        '<span style="cursor:pointer;color:#ef4444;font-size:12px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;white-space:nowrap" onclick="removeExtractedRoot('+idx+')" onmouseover="this.style.borderColor=\'#ef4444\'" onmouseout="this.style.borderColor=\'var(--border)\'">✕ 删除</span>' +
+      '</div>';
+    }
+    html += '<tr style="' + rowStyle + '">' +
+      '<td style="padding:8px;font-weight:600;color:' + nameColor + '">' + (r.name || '-') + dupTag + '</td>' +
       '<td style="padding:8px;font-family:monospace;color:var(--text2)">' + (r.en || '-') + '</td>' +
-      '<td style="padding:8px"><span class="rcard-tag cat">' + (r.cat || '-') + '</span></td>' +
+      '<td style="padding:8px"><span class="rcard-tag cat" style="white-space:nowrap">' + (r.cat || '-') + '</span></td>' +
       '<td style="padding:8px;text-align:center;font-weight:600;color:var(--text)">' + (r.count || 0) + '</td>' +
       '<td style="padding:8px;font-size:12px;color:var(--text3)">' + (r.examples ? r.examples.slice(0, 3).join('、') : '-') + '</td>' +
+      '<td style="padding:8px">' + actionHtml + '</td>' +
     '</tr>';
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+}
+
+function removeExtractedRoot(idx) {
+  var r = extractedRoots[idx];
+  if (!r) return;
+  extractedRoots.splice(idx, 1);
+  var cnCount = {};
+  extractedRoots.forEach(function(r) { cnCount[r.name] = (cnCount[r.name]||0) + 1; });
+  extractedRoots.forEach(function(r) { r.duplicate = cnCount[r.name] > 1; });
+  renderExtractPreview();
+  showToast('已移除词根「' + r.name + '(' + r.en + ')」', '#ef4444');
+}
+
+function editExtractedRoot(idx) {
+  var r = extractedRoots[idx];
+  if (!r) return;
+  var overlay = document.createElement('div');
+  overlay.id = 'editRootOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:10001;display:grid;place-items:center;backdrop-filter:blur(4px)';
+  var catOptions = ['标识','时间','通用','钢铁','人员','设备','数量','位置','业务','质量','操作','属性','物料','组织','财务'].map(function(c) {
+    return '<option value="'+c+'"'+(c===r.cat?' selected':'')+'>'+c+'</option>';
+  }).join('');
+  var html = '<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-size:16px;font-weight:700;color:var(--text)">✏️ 编辑词根</div><span style="cursor:pointer;font-size:18px;color:var(--text3)" onclick="document.getElementById(\'editRootOverlay\').remove()">✕</span></div>' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div class="fg"><label>词根名称</label><input id="erName" value="'+(r.name||'').replace(/"/g,'&quot;')+'"></div>' +
+      '<div class="fg"><label>英文</label><input id="erEn" value="'+(r.en||'')+'" readonly style="opacity:.6"></div>' +
+      '<div class="fg"><label>含义</label><input id="erMean" value="'+(r.mean||'').replace(/"/g,'&quot;')+'"></div>' +
+      '<div class="fg"><label>分类</label><select id="erCat">'+catOptions+'</select></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">' +
+      '<button class="btn ghost" onclick="document.getElementById(\'editRootOverlay\').remove()">取消</button>' +
+      '<button class="btn primary" onclick="saveEditedRoot('+idx+')">保存</button>' +
+    '</div></div>';
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+}
+
+function saveEditedRoot(idx) {
+  var r = extractedRoots[idx];
+  if (!r) return;
+  r.name = document.getElementById('erName').value.trim() || r.name;
+  r.mean = document.getElementById('erMean').value.trim() || r.mean;
+  r.cat = document.getElementById('erCat').value;
+  document.getElementById('editRootOverlay').remove();
+  // 重新计算 duplicate
+  var cnCount = {};
+  extractedRoots.forEach(function(r) { cnCount[r.name] = (cnCount[r.name]||0) + 1; });
+  extractedRoots.forEach(function(r) { r.duplicate = cnCount[r.name] > 1; });
+  renderExtractPreview();
+  showToast('词根「' + r.en + '」已更新', '#22c55e');
 }
 
 function doImportExtractedRoots() {
@@ -3256,6 +3333,54 @@ function doImportExtractedRoots() {
       el.innerHTML = '<div class="form-card" style="margin-top:16px;text-align:center;color:#ef4444">导入失败：' + (resp && resp.error || '未知错误') + '</div>';
     }
   });
+}
+
+function doImportExtractedWords() {
+  if (!extractedWords || !extractedWords.length) { showToast('没有可导入的词条', '#ef4444'); return; }
+  // 根据当前剩余的词根过滤词条（被删除的词根关联的词条不导入）
+  var remainingRootEns = {};
+  extractedRoots.forEach(function(r) { remainingRootEns[r.en] = true; });
+  var filteredWords = extractedWords.filter(function(w) {
+    var parts = w.en.toLowerCase().split('_');
+    // 词条中至少有一个词根片段在剩余词根中
+    for (var i = 0; i < parts.length; i++) {
+      if (remainingRootEns[parts[i]]) return true;
+    }
+    return false;
+  });
+  if (!filteredWords.length) { showToast('没有与当前词根关联的词条可导入', '#ef4444'); return; }
+  if (!confirm('确定要导入 ' + filteredWords.length + ' 个词条到词条共创吗？（已过滤掉被删除词根关联的词条）')) return;
+  showToast('正在导入 ' + filteredWords.length + ' 个词条...', 'var(--primary)');
+  apiCall('POST', '/api/init_words', filteredWords, function(resp) {
+    if (resp && resp.count !== undefined) {
+      showToast('成功导入 ' + resp.count + ' 个词条（草稿状态）', '#22c55e');
+      loadFromStorage();
+      updatePendingBadge();
+      // 弹窗提示去审核
+      if (confirm('导入成功！' + resp.count + ' 个词条已进入草稿状态。\n是否前往审核中心审核发布？')) {
+        switchTab('audit');
+        switchAuditTab('word');
+      }
+    } else {
+      showToast('导入失败：' + (resp && resp.error || '未知错误'), '#ef4444');
+    }
+  });
+}
+
+function exportExtractedRoots() {
+  if (!extractedRoots.length) { showToast('没有可导出的词根', '#ef4444'); return; }
+  authFetch('/api/extract_roots/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roots: extractedRoots })
+  }).then(function(r) { return r.blob(); }).then(function(blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '词根剥离结果_' + extractedRoots.length + '条.xlsx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('已导出 ' + extractedRoots.length + ' 条词根', '#22c55e');
+  }).catch(function(e) { showToast('导出失败：' + e.message, '#ef4444'); });
 }
 
 // ========== 批量操作模块 ==========
@@ -3305,6 +3430,37 @@ function batchApprove(status) {
     } else {
       showToast('批量操作失败：' + (resp && resp.error || '未知错误'), '#ef4444');
     }
+  });
+}
+
+function batchApproveAll() {
+  var allPending = words.filter(function(w) { return w.status === 'draft' || w.status === 'pending'; });
+  if (!allPending.length) { showToast('没有待审核的词条', '#ef4444'); return; }
+  if (!confirm('确定要一键发布全部 ' + allPending.length + ' 条待审核词条吗？')) return;
+  var ids = allPending.map(function(w) { return w.id; });
+  // 分批处理，每批 500 条
+  var batchSize = 500;
+  var totalSuccess = 0, totalFail = 0;
+  var batches = [];
+  for (var i = 0; i < ids.length; i += batchSize) {
+    batches.push(ids.slice(i, i + batchSize));
+  }
+  showToast('正在发布 ' + ids.length + ' 条词条（' + batches.length + ' 批）...', 'var(--primary)');
+  var done = 0;
+  batches.forEach(function(batch) {
+    apiCall('POST', '/api/words/batch_approve', { ids: batch, status: 'approved' }, function(resp) {
+      done++;
+      if (resp && resp.success !== undefined) {
+        totalSuccess += resp.success;
+        totalFail += (resp.failed ? resp.failed.length : 0);
+      }
+      if (done >= batches.length) {
+        showToast('一键发布完成：成功 ' + totalSuccess + ' 条' + (totalFail > 0 ? '，失败 ' + totalFail + ' 条' : ''), '#22c55e');
+        loadFromStorage();
+        renderAudit();
+        updatePendingBadge();
+      }
+    });
   });
 }
 
