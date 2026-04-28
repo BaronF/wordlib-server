@@ -198,6 +198,8 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <input id="rootSearch" placeholder="搜索词根、含义..." style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);font-size:13px;outline:none;width:200px" oninput="renderRoots()">
+        <span style="cursor:pointer;font-size:16px;color:var(--text3);margin-left:-30px;z-index:1;position:relative" onclick="document.getElementById('rootSearch').value='';renderRoots()" title="清除">✕</span>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);white-space:nowrap"><input type="checkbox" id="rootExactMatch" onchange="renderRoots()" style="accent-color:var(--primary)"> 精确</label>
         <select id="rootCatFilter" onchange="renderRoots()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);font-size:13px;outline:none">
           <option value="">全部分类</option>
           <option value="时间">时间</option><option value="数量">数量</option><option value="标识">标识</option>
@@ -410,8 +412,8 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <div id="reportHotRoots" style="max-height:400px;overflow-y:auto"></div>
       </div>
       <div class="form-card">
-        <h3 style="font-size:15px;margin-bottom:12px;color:var(--text)">📂 分类分布</h3>
-        <div id="reportCategoryDist"></div>
+        <h3 style="font-size:15px;margin-bottom:12px;color:var(--text)">📊 词根覆盖率</h3>
+        <div id="reportCoverage"></div>
       </div>
     </div>
   </div>
@@ -435,7 +437,7 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
 /* 词根卡片 */
 .rcard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;transition:all .3s;cursor:pointer;position:relative}
 .rcard:hover{border-color:var(--primary);box-shadow:0 6px 24px rgba(232,115,12,.12);transform:translateY(-2px)}
-.rcard-name{font-size:18px;font-weight:800;color:var(--primary);font-family:'Courier New',monospace;letter-spacing:1px;text-transform:uppercase}
+.rcard-name{font-size:18px;font-weight:800;color:var(--primary);font-family:'Courier New',monospace;letter-spacing:1px}
 .rcard-mean{font-size:14px;font-weight:600;color:var(--text);margin-top:4px}
 .rcard-meta{display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap}
 .rcard-tag{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
@@ -747,6 +749,29 @@ function renderCards(list, keyword) {
   empty.style.display = 'none';
   list.forEach(function(w) {
     var roots = highlightRoots(w.roots, keyword);
+    // 自动匹配词根组合
+    if (!roots || roots === w.cn + '-' + w.cn || roots === w.cn) {
+      var parts = (w.en || '').toLowerCase().split('_');
+      var matched = [];
+      parts.forEach(function(p) {
+        if (p.length > 1) {
+          for (var ri = 0; ri < window.roots.length; ri++) {
+            if (window.roots[ri].en && window.roots[ri].en.toLowerCase() === p) {
+              matched.push(window.roots[ri].name);
+              break;
+            }
+          }
+          if (!matched.length || matched[matched.length - 1] !== p) {
+            // 没匹配到词根库的，也显示英文片段
+          }
+        }
+      });
+      if (matched.length) roots = matched.join(' + ');
+      else {
+        // 没有任何匹配，按英文拆分显示
+        roots = parts.filter(function(p){ return p.length > 1; }).join(' + ');
+      }
+    }
     var liked = w.liked ? '🧡' : '🤍';
     var likeStyle = w.liked ? 'cursor:pointer;font-size:16px' : 'cursor:pointer;font-size:16px;opacity:.4';
     var adminBtns = isAdmin ? '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px" class="wcard-actions">' +
@@ -757,7 +782,7 @@ function renderCards(list, keyword) {
       '<div class="wcard-top">' +
         '<span class="wcard-name"><input type="checkbox" class="word-check" data-id="'+w.id+'" onclick="event.stopPropagation();updateSelectedCount()" style="accent-color:var(--primary);cursor:pointer;margin-right:6px;display:none">' + (w.isNew ? '<span style="background:var(--primary);color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;margin-right:4px">NEW</span>' : '') + w.cn + '</span>' +
         '<span style="display:flex;align-items:center;gap:8px">' +
-          '<span class="wcard-score">' + w.score.toFixed(2) + '</span>' +
+          '<span class="wcard-score">🔥 ' + w.score.toFixed(2) + '</span>' +
           '<span style="cursor:pointer;font-size:14px;opacity:.4;transition:opacity .2s" onclick="event.stopPropagation();copyWord('+w.id+')" title="一键复制" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.4">📋</span>' +
           '<span style="' + likeStyle + '" onclick="event.stopPropagation();toggleLike('+w.id+')" title="点赞">' + liked + '</span>' +
           '<span class="wcard-cat">' + w.cat + '</span>' +
@@ -1048,6 +1073,25 @@ function showDetail(id) {
   var statusMap = {draft:'草稿',pending:'待审核',approved:'已发布',offline:'已下线',rejected:'已驳回'};
   var statusColor = {draft:'#a0a0a0',pending:'#f59e0b',approved:'#22c55e',offline:'#666',rejected:'#ef4444'};
   var roots = (w.roots || '').replace(/[\[\]"]/g, '');
+  // 自动匹配词根组合
+  if (!roots || roots === w.cn + '-' + w.cn || roots === w.cn) {
+    var parts = (w.en || '').toLowerCase().split('_');
+    var matched = [];
+    parts.forEach(function(p) {
+      if (p.length > 1) {
+        for (var ri = 0; ri < window.roots.length; ri++) {
+          if (window.roots[ri].en && window.roots[ri].en.toLowerCase() === p) {
+            matched.push(window.roots[ri].name);
+            break;
+          }
+        }
+      }
+    });
+    if (matched.length) roots = matched.join(' + ');
+    else {
+      roots = parts.filter(function(p){ return p.length > 1; }).join(' + ');
+    }
+  }
   var html = '<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:28px 32px;max-width:520px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5)">' +
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">' +
       '<div style="font-size:20px;font-weight:700;color:var(--text)">' + w.cn + '</div>' +
@@ -1066,7 +1110,7 @@ function showDetail(id) {
       '<span style="color:var(--text3)">英文描述</span><span style="color:var(--text2)">' + (w.enDesc || '—') + '</span>' +
       '<span style="color:var(--text3)">备注</span><span style="color:var(--text2)">' + (w.abbr || '—') + '</span>' +
       '<span style="color:var(--text3)">参考表</span><span style="color:var(--text2);font-family:monospace;font-size:13px">' + (w.ref || '—') + '</span>' +
-      '<span style="color:var(--text3)">评分</span><span style="color:var(--text2)">' + w.score.toFixed(2) + '</span>' +
+      '<span style="color:var(--text3)">热度</span><span style="color:var(--text2)">' + w.score.toFixed(2) + '</span>' +
       '<span style="color:var(--text3)">状态</span><span style="font-weight:600;color:' + (statusColor[w.status]||'var(--text2)') + '">' + (statusMap[w.status]||w.status) + '</span>' +
       '<span style="color:var(--text3)">更新时间</span><span style="color:var(--text3)">' + w.time + '</span>' +
     '</div></div>';
@@ -2573,13 +2617,18 @@ function renderRoots() {
   var stat = document.getElementById('rootsStat');
   var kw = (document.getElementById('rootSearch').value || '').trim().toLowerCase();
   var cat = document.getElementById('rootCatFilter').value;
+  var exact = document.getElementById('rootExactMatch') && document.getElementById('rootExactMatch').checked;
   var list = roots.filter(function(r) {
     // 非管理员只看已发布的词根
     if (!isAdmin && r.status !== 'approved') return false;
     if (cat && r.cat !== cat) return false;
     if (kw) {
       var s = (r.name + r.en + r.mean + r.src + r.cat + (r.examples||[]).join('')).toLowerCase();
-      if (s.indexOf(kw) === -1) return false;
+      if (exact) {
+        if (r.name !== kw && r.en.toLowerCase() !== kw) return false;
+      } else {
+        if (s.indexOf(kw) === -1) return false;
+      }
     }
     return true;
   });
@@ -2600,6 +2649,7 @@ function renderRoots() {
       '<span style="cursor:pointer;font-size:13px;padding:4px 8px;border-radius:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);transition:all .2s" onclick="event.stopPropagation();showRootEditor('+r.id+')" onmouseover="this.style.borderColor=\'var(--primary)\';this.style.color=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--text2)\'" title="编辑">✏️</span>' +
       (r.status === 'approved' ? '<span style="cursor:pointer;font-size:13px;padding:4px 8px;border-radius:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text2);transition:all .2s" onclick="event.stopPropagation();offlineRoot('+r.id+');renderRoots()" onmouseover="this.style.borderColor=\'#f59e0b\';this.style.color=\'#f59e0b\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.color=\'var(--text2)\'" title="下线">🔒</span>' : '') +
       '</div>' : '';
+    var hotTag = relCount >= 5 ? '<span style="position:absolute;top:12px;right:' + (isAdmin ? '90' : '14') + 'px;font-size:14px;z-index:1" title="热门词根（关联'+relCount+'个词条）">🔥</span>' : '';
     var exHtml = (r.examples||[]).slice(0,4).map(function(ex) {
       return '<span style="padding:2px 8px;border-radius:8px;font-size:11px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)">' + ex + '</span>';
     }).join('');
@@ -2612,16 +2662,17 @@ function renderRoots() {
     var checkHtml = '<input type="checkbox" class="root-check" data-id="'+r.id+'" onclick="event.stopPropagation();updateRootSelectedCount()" style="accent-color:var(--primary);cursor:pointer;position:absolute;top:14px;right:' + (isAdmin ? '70' : '14') + 'px;display:none;z-index:2">';
     var html = '<div class="rcard" onclick="showRootDetail('+r.id+')"' + (r.status !== 'approved' ? ' style="opacity:.75"' : '') + '>' +
       checkHtml +
+      hotTag +
       rootStatusHtml +
       adminBtns +
-      '<div class="rcard-name">' + r.en + '</div>' +
-      '<div class="rcard-mean">' + r.name + ' — ' + r.mean + '</div>' +
+      '<div class="rcard-name">' + r.en.toLowerCase() + '</div>' +
+      '<div class="rcard-mean">' + r.name + '</div>' +
       '<div class="rcard-meta">' +
         '<span class="rcard-tag src">' + r.src + '</span>' +
         '<span class="rcard-tag cat">' + r.cat + '</span>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px">' + exHtml + '</div>' +
-      '<div class="rcard-count">关联 ' + relCount + ' 个已发布词条</div>' +
+      '<div class="rcard-count" onclick="event.stopPropagation();switchTab(\'words\');document.getElementById(\'searchInput\').value=\''+r.en.toLowerCase()+'\';doSearch()" style="cursor:pointer;transition:color .2s" onmouseover="this.style.color=\'var(--primary)\'" onmouseout="this.style.color=\'var(--text3)\'">关联 ' + relCount + ' 个已发布词条 →</div>' +
     '</div>';
     grid.insertAdjacentHTML('beforeend', html);
   });
@@ -2677,7 +2728,7 @@ function showRootDetail(id) {
       '<div style="font-size:13px;font-weight:600;color:var(--text2);margin-bottom:10px">📚 关联已发布词条（' + relWords.length + '）</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">';
     relWords.forEach(function(w) {
-      relHtml += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);cursor:pointer;transition:all .2s" onclick="this.closest(\'div[style*=position\\:fixed]\').remove();showDetail('+w.id+')" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\'">' +
+      relHtml += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border);cursor:pointer;transition:all .2s" onclick="showDetail('+w.id+')" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\'">' +
         '<div><span style="font-weight:600;color:var(--text)">' + w.cn + '</span> <span style="color:var(--primary);font-family:monospace;font-size:12px">' + w.en + '</span></div>' +
         '<span class="wcard-cat">' + w.cat + '</span>' +
       '</div>';
@@ -3544,6 +3595,7 @@ function showSynonymManager() {
   var modal = document.createElement('div');
   modal.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)';
   modal.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-size:17px;font-weight:700;color:var(--text)">🔗 同义词管理</div><span style="cursor:pointer;font-size:20px;color:var(--text3)" onclick="document.getElementById(\'synonymOverlay\').remove()">✕</span></div>' +
+    '<div style="font-size:12px;color:var(--text3);margin-bottom:12px;padding:10px;background:var(--bg3);border-radius:6px">💡 同义词映射用于相似度检测。例如：state → status（都表示状态），将 state 映射为标准词 status，检测时会自动替换后比较。</div>' +
     '<div style="display:flex;gap:8px;margin-bottom:16px">' +
       '<input id="synWord" placeholder="同义词" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg3);color:var(--text);font-size:13px;outline:none">' +
       '<input id="synStandard" placeholder="标准词" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg3);color:var(--text);font-size:13px;outline:none">' +
@@ -3673,7 +3725,7 @@ function loadReport() {
   loadReportTrend();
   loadReportApproval();
   loadReportHotRoots();
-  loadReportCategoryDist();
+  loadReportCoverage();
 }
 
 function loadReportOverview() {
@@ -3761,30 +3813,45 @@ function loadReportHotRoots() {
   });
 }
 
-function loadReportCategoryDist() {
-  authFetch('/api/report/category_dist').then(function(r) { return r.json(); }).then(function(data) {
-    var list = data.categories || data || [];
-    var el = document.getElementById('reportCategoryDist');
-    if (!list.length) { el.innerHTML = '<div style="color:var(--text3);text-align:center;padding:20px">暂无数据</div>'; return; }
-    var totalWords = list.reduce(function(s, c) { return s + (c.word_count || 0); }, 0) || 1;
-    var catColors = ['var(--primary)', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
-    var html = '<div style="display:flex;flex-direction:column;gap:10px">';
-    list.forEach(function(c, i) {
-      var color = catColors[i % catColors.length];
-      var pct = ((c.word_count || 0) / totalWords * 100).toFixed(1);
-      html += '<div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
-          '<span style="font-size:13px;font-weight:600;color:' + color + '">' + (c.category || '-') + '</span>' +
-          '<span style="font-size:12px;color:var(--text3)">词条 ' + (c.word_count || 0) + ' · 词根 ' + (c.root_count || 0) + '</span>' +
-        '</div>' +
-        '<div style="background:var(--bg3);border-radius:4px;height:8px;overflow:hidden"><div style="background:' + color + ';height:100%;width:' + pct + '%;border-radius:4px"></div></div>' +
-      '</div>';
+function loadReportCoverage() {
+  // 词根覆盖率：统计已发布词条中，英文名能被词根库覆盖的比例
+  var el = document.getElementById('reportCoverage');
+  var approvedWords = words.filter(function(w) { return w.status === 'approved'; });
+  var total = approvedWords.length;
+  if (!total) { el.innerHTML = '<div style="color:var(--text3);text-align:center;padding:20px">暂无已发布词条</div>'; return; }
+  var fullCover = 0, partialCover = 0, noCover = 0;
+  approvedWords.forEach(function(w) {
+    var parts = (w.en || '').toLowerCase().split('_').filter(function(p) { return p.length > 1; });
+    if (!parts.length) { noCover++; return; }
+    var matchCount = 0;
+    parts.forEach(function(p) {
+      for (var i = 0; i < roots.length; i++) {
+        if (roots[i].en && roots[i].en.toLowerCase() === p) { matchCount++; break; }
+      }
     });
-    html += '</div>';
-    el.innerHTML = html;
-  }).catch(function() {
-    document.getElementById('reportCategoryDist').innerHTML = '<div style="color:var(--text3);text-align:center;padding:20px">加载失败</div>';
+    if (matchCount === parts.length) fullCover++;
+    else if (matchCount > 0) partialCover++;
+    else noCover++;
   });
+  var fullPct = (fullCover / total * 100).toFixed(1);
+  var partPct = (partialCover / total * 100).toFixed(1);
+  var noPct = (noCover / total * 100).toFixed(1);
+  var html = '<div style="display:flex;flex-direction:column;gap:14px">' +
+    '<div style="display:flex;align-items:center;gap:12px">' +
+      '<div style="width:48px;height:48px;border-radius:50%;background:rgba(34,197,94,.12);display:grid;place-items:center;font-size:20px">✅</div>' +
+      '<div><div style="font-size:22px;font-weight:800;color:#22c55e">' + fullPct + '%</div><div style="font-size:12px;color:var(--text3)">完全覆盖（' + fullCover + ' 条）</div></div>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:12px">' +
+      '<div style="width:48px;height:48px;border-radius:50%;background:rgba(245,158,11,.12);display:grid;place-items:center;font-size:20px">⚠️</div>' +
+      '<div><div style="font-size:22px;font-weight:800;color:#f59e0b">' + partPct + '%</div><div style="font-size:12px;color:var(--text3)">部分覆盖（' + partialCover + ' 条）</div></div>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:12px">' +
+      '<div style="width:48px;height:48px;border-radius:50%;background:rgba(239,68,68,.12);display:grid;place-items:center;font-size:20px">❌</div>' +
+      '<div><div style="font-size:22px;font-weight:800;color:#ef4444">' + noPct + '%</div><div style="font-size:12px;color:var(--text3)">未覆盖（' + noCover + ' 条）</div></div>' +
+    '</div>' +
+    '<div style="margin-top:8px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;color:var(--text3)">💡 覆盖率 = 词条英文名中所有片段均能在词根库中找到对应词根</div>' +
+  '</div>';
+  el.innerHTML = html;
 }
 
 </script>
