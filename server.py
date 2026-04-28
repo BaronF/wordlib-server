@@ -12,7 +12,9 @@ import secrets
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get('PORT', 8080))
-DB_FILE = os.path.join(SCRIPT_DIR, 'wordlib.db')
+# 数据库文件：优先存到 /data（Railway Volume），否则存到脚本目录
+DATA_DIR = '/data' if os.path.isdir('/data') else SCRIPT_DIR
+DB_FILE = os.path.join(DATA_DIR, 'wordlib.db')
 LOG_FILE = os.path.join(SCRIPT_DIR, 'server.log')
 
 def write_log(msg):
