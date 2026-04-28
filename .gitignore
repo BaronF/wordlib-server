@@ -7,5 +7,8 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
-*.txt
-!requirements.txt
+logo_base64.txt
+start_content.txt
+java_code.txt
+MANIFEST.MF
+WordLibServer.java
