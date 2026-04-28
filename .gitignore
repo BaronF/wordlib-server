@@ -1,0 +1,11 @@
+*.class
+*.jar
+*.pyc
+__pycache__/
+*.ps1
+*.log
+*.db
+*.db-wal
+*.db-shm
+*.txt
+!requirements.txt
