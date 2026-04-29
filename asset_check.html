@@ -786,6 +786,21 @@ function checkFormat(l4, l5) {
       issues.push({type:'列错位',msg:srcTbl(a)+'字段 <code>'+a.en+'</code> 疑似列错位：空否列填了 <code>'+nul+'</code>（应为Y/N），可能是长度值'});
     }
   });
+  // 16. 类型或长度缺失检测（修正后仍为空的字段）
+  l5.forEach(function(a){
+    var tp = (a.tp||'').trim();
+    var len = (a.len||'').trim();
+    var en = (a.en||'').trim().toLowerCase();
+    if (!en || en === 'id' || en === 'uuid') return; // 跳过主键
+    if (!tp) {
+      issues.push({type:'类型缺失',msg:srcTbl(a)+'字段 <code>'+a.en+'</code>（'+a.cn+'）缺少数据类型'});
+    }
+    if (!len && tp && /VARCHAR|CHAR|NVARCHAR|DECIMAL|NUMERIC/i.test(tp)) {
+      // 已有 "类型缺长度" 规则处理，这里不重复
+    } else if (!len && !tp) {
+      issues.push({type:'类型缺失',msg:srcTbl(a)+'字段 <code>'+a.en+'</code>（'+a.cn+'）缺少数据类型和长度'});
+    }
+  });
   return issues;
 }
 </script>
@@ -795,7 +810,7 @@ function renderResult() {
   var mcnN=Object.keys(state.mcn).length, menN=Object.keys(state.men).length, fmtN=state.fmt.length;
   var fmtByType={};
   state.fmt.forEach(function(f){if(!fmtByType[f.type])fmtByType[f.type]=[];fmtByType[f.type].push(f)});
-  var icons={'表名重复':'🔄','字段名重复':'🔄','类型缺长度':'📏','字段名不规范':'⚠️','表名不规范':'⚠️','空字段名':'❌','空表名':'❌','主键缺失':'🔑','类型不规范':'📋','字段类型不一致':'🔀','字段长度不一致':'📐','跨文档表名冲突':'🔗','跨文档字段类型不一致':'🔗','表名缺失':'❓','列错位':'🔀'};
+  var icons={'表名重复':'🔄','字段名重复':'🔄','类型缺长度':'📏','字段名不规范':'⚠️','表名不规范':'⚠️','空字段名':'❌','空表名':'❌','主键缺失':'🔑','类型不规范':'📋','字段类型不一致':'🔀','字段长度不一致':'📐','跨文档表名冲突':'🔗','跨文档字段类型不一致':'🔗','表名缺失':'❓','列错位':'🔀','类型缺失':'❓'};
 
   // 异步加载词条库数据做字段匹配校验
   loadWordlibMatch();
