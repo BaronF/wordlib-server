@@ -46,13 +46,12 @@ class PgCursorWrapper:
         sql = sql.replace("date('now','start of month')", "DATE_TRUNC('month', CURRENT_DATE)::date")
         # PostgreSQL 大小写敏感列名处理
         import re as _re
-        # 在非建表语句中，给 cnDesc/enDesc/dataType/dataLen/enumValues 加引号
         if 'CREATE TABLE' not in sql.upper():
             sql = _re.sub(r'\bcnDesc\b', '"cnDesc"', sql)
             sql = _re.sub(r'\benDesc\b', '"enDesc"', sql)
-            sql = _re.sub(r'\bdataType\b', '"dataType"', sql)
-            sql = _re.sub(r'\bdataLen\b', '"dataLen"', sql)
-            sql = _re.sub(r'\benumValues\b', '"enumValues"', sql)
+            sql = _re.sub(r'\bdataType\b', 'datatype', sql)
+            sql = _re.sub(r'\bdataLen\b', 'datalen', sql)
+            sql = _re.sub(r'\benumValues\b', 'enumvalues', sql)
         self._cursor.execute(sql, params or ())
         # 获取 lastrowid（INSERT 时）
         if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
@@ -205,9 +204,9 @@ def get_db():
                 "cnDesc" TEXT DEFAULT '',
                 "enDesc" TEXT DEFAULT '',
                 ref TEXT DEFAULT '',
-                "dataType" TEXT DEFAULT '',
-                "dataLen" TEXT DEFAULT '',
-                "enumValues" TEXT DEFAULT '',
+                datatype TEXT DEFAULT '',
+                datalen TEXT DEFAULT '',
+                enumvalues TEXT DEFAULT '',
                 status TEXT DEFAULT 'draft',
                 time TEXT DEFAULT CURRENT_DATE,
                 deleted INTEGER DEFAULT 0,
@@ -297,6 +296,13 @@ def get_db():
                 time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
             )
         """)
+        # PostgreSQL 自动迁移：给已有 words 表加新字段（用小写列名）
+        for col in ('datatype', 'datalen', 'enumvalues'):
+            try:
+                raw_conn.cursor().execute(f"ALTER TABLE words ADD COLUMN {col} TEXT DEFAULT ''")
+                raw_conn.commit()
+            except:
+                raw_conn.rollback()
         _init_admin_account(conn)
         conn.commit()
         return conn
