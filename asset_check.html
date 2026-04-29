@@ -369,6 +369,8 @@ function extractFromElementsSync(elements, fname) {
       var hdr=rows[0].join(' ');
       // 跳过数据字典表（表头含"代码"/"编码"/"取值范围"等特征）
       if (hdr.indexOf('代码')>=0 || hdr.indexOf('编码')>=0 || hdr.indexOf('取值范围')>=0 || hdr.indexOf('数据字典')>=0) continue;
+      // 跳过DB清单表（表头含"表英文"/"表中文"/"所属模块"/"关联表"等特征）
+      if (hdr.indexOf('表英文')>=0 || hdr.indexOf('表中文')>=0 || hdr.indexOf('所属模块')>=0 || hdr.indexOf('关联表')>=0) continue;
       if (hdr.indexOf('字段')>=0 || hdr.indexOf('英文')>=0) {
         var hdrs=rows[0], enCol=-1, cnCol=-1, tpCol=-1, lenCol=-1, pkCol=-1, nulCol=-1;
         for(var ci=0;ci<hdrs.length;ci++){
