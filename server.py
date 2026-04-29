@@ -667,7 +667,13 @@ def _extract_roots_from_xlsx(filepath):
     # 构建词条列表（每个字段对就是一个词条）
     word_list = []
     seen_words = set()
-    for en, cn in field_pairs:
+    for item in field_pairs:
+        # 兼容 (en, cn) 和 (en, cn, tp, ln) 两种格式
+        if len(item) >= 4:
+            en, cn, tp, ln = item[0], item[1], item[2], item[3]
+        else:
+            en, cn = item[0], item[1]
+            tp, ln = '', ''
         if not en or not cn: continue
         key = en.lower() + '|' + cn
         if key in seen_words: continue
@@ -684,7 +690,7 @@ def _extract_roots_from_xlsx(filepath):
             'cn': cn, 'en': en, 'cat': cat,
             'roots': json.dumps([cn + '-' + cn], ensure_ascii=False),
             'score': 0, 'abbr': '', 'cnDesc': '', 'enDesc': '',
-            'ref': '', 'dataType': '', 'dataLen': '', 'enumValues': '', 'status': 'draft',
+            'ref': '', 'dataType': tp, 'dataLen': ln, 'enumValues': '', 'status': 'draft',
             'time': datetime.datetime.now().strftime('%Y-%m-%d')
         })
 
@@ -767,7 +773,8 @@ def _extract_roots_from_xlsx(filepath):
     root_counter = Counter()
     root_examples = defaultdict(set)
 
-    for en, cn in field_pairs:
+    for item in field_pairs:
+        en, cn = item[0], item[1]
         parts = en.lower().strip().split('_')
         # 提取核心词根
         core = _extract_core_root(parts)
@@ -860,7 +867,16 @@ def _extract_fields_from_xlsx(filepath):
         # 智能识别英文列和中文列
         # 策略：找表头中包含"英文"/"字段名"的列作为英文列，相邻的"中文"列作为中文列
         hdr_row = rows_data.get(1, {})
-        en_cols = []  # [(en_col_idx, cn_col_idx)]
+        en_cols = []  # [(en_col_idx, cn_col_idx, tp_col_idx, len_col_idx)]
+
+        # 先找类型列和长度列
+        tp_col_global = None
+        len_col_global = None
+        for ci, val in hdr_row.items():
+            if ('类型' in val or 'type' in val.lower()) and tp_col_global is None:
+                tp_col_global = ci
+            if ('长度' in val or 'length' in val.lower() or '精度' in val) and len_col_global is None:
+                len_col_global = ci
 
         for ci, val in hdr_row.items():
             val_lower = val.lower().replace(' ', '')
@@ -873,7 +889,7 @@ def _extract_fields_from_xlsx(filepath):
                     if '中文' in neighbor:
                         cn_ci = ci + offset
                         break
-                en_cols.append((ci, cn_ci))
+                en_cols.append((ci, cn_ci, tp_col_global, len_col_global))
 
         # 如果没找到明确的表头，尝试自动检测：找包含下划线英文的列
         if not en_cols:
@@ -900,24 +916,26 @@ def _extract_fields_from_xlsx(filepath):
                         if cn_count >= 3:
                             cn_col = test_col
                             break
-                    en_cols.append((best_en_col, cn_col))
+                    en_cols.append((best_en_col, cn_col, tp_col_global, len_col_global))
 
-        # 提取字段对
-        for en_ci, cn_ci in en_cols:
+        # 提取字段对（含类型和长度）
+        for en_ci, cn_ci, tp_ci, len_ci in en_cols:
             for rn in sorted(rows_data.keys()):
                 if rn <= 1: continue
                 row = rows_data[rn]
                 en = row.get(en_ci, '').strip()
                 cn = row.get(cn_ci, '').strip() if cn_ci is not None else ''
+                tp = row.get(tp_ci, '').strip() if tp_ci is not None else ''
+                ln = row.get(len_ci, '').strip() if len_ci is not None else ''
                 if en and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', en):
-                    field_pairs.add((en, cn))
+                    field_pairs.add((en, cn, tp, ln))
 
     z.close()
     return field_pairs
 
 
 def _extract_fields_from_docx(filepath):
-    """从 docx 文件提取英文-中文字段对（从表格中）"""
+    """从 docx 文件提取英文-中文字段对（含字段类型和长度）"""
     import zipfile
     import xml.etree.ElementTree as ET
     z = zipfile.ZipFile(filepath)
@@ -954,14 +972,18 @@ def _extract_fields_from_docx(filepath):
                 cells.append(get_accepted_text(tc).strip())
             rows.append(cells)
         if len(rows) < 2: continue
-        # 找英文列和中文列
+        # 找英文列、中文列、类型列、长度列
         hdr = rows[0]
-        en_ci, cn_ci = None, None
+        en_ci, cn_ci, tp_ci, len_ci = None, None, None, None
         for ci, val in enumerate(hdr):
             if '英文' in val and '中文' not in val and en_ci is None:
                 en_ci = ci
             elif '中文' in val and cn_ci is None:
                 cn_ci = ci
+            elif ('类型' in val or 'type' in val.lower()) and tp_ci is None:
+                tp_ci = ci
+            elif ('长度' in val or 'length' in val.lower() or '精度' in val) and len_ci is None:
+                len_ci = ci
         # 如果没找到表头，尝试自动检测
         if en_ci is None:
             for ci, val in enumerate(hdr):
@@ -969,13 +991,15 @@ def _extract_fields_from_docx(filepath):
                     en_ci = ci
                     break
         if en_ci is None: continue
-        # 提取字段对
+        # 提取字段对（含类型和长度）
         for row in rows[1:]:
             if en_ci >= len(row): continue
             en = row[en_ci].strip()
             cn = row[cn_ci].strip() if cn_ci is not None and cn_ci < len(row) else ''
+            tp = row[tp_ci].strip() if tp_ci is not None and tp_ci < len(row) else ''
+            ln = row[len_ci].strip() if len_ci is not None and len_ci < len(row) else ''
             if en and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', en):
-                field_pairs.add((en, cn))
+                field_pairs.add((en, cn, tp, ln))
 
     return field_pairs
 
