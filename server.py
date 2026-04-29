@@ -1884,40 +1884,56 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/api/init_words':
             items = data if isinstance(data, list) else data.get('words', [])
             conn = get_db()
-            for w in items:
-                conn.execute(
-                    """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (w.get('cn',''), w.get('en',''), w.get('cat',''),
-                     w.get('roots',''), w.get('score',0), w.get('abbr',''),
-                     w.get('cnDesc',''), w.get('enDesc',''), w.get('ref',''),
-                     w.get('dataType',''), w.get('dataLen',''), w.get('enumValues',''),
-                     w.get('status','approved'), w.get('time',''))
-                )
+            count = 0
+            batch_size = 100
+            for i, w in enumerate(items):
+                try:
+                    conn.execute(
+                        """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (w.get('cn',''), w.get('en',''), w.get('cat',''),
+                         w.get('roots',''), w.get('score',0), w.get('abbr',''),
+                         w.get('cnDesc',''), w.get('enDesc',''), w.get('ref',''),
+                         w.get('dataType',''), w.get('dataLen',''), w.get('enumValues',''),
+                         w.get('status','approved'), w.get('time',''))
+                    )
+                    count += 1
+                except Exception as e:
+                    write_log(f'导入词条失败: {e}, cn={w.get("cn","")}, en={w.get("en","")}')
+                # 每 batch_size 条 commit 一次
+                if (i + 1) % batch_size == 0:
+                    conn.commit()
             conn.commit()
             conn.close()
-            self._log_op('批量初始化词条', f'共{len(items)}条')
-            self._send_json(200, {"msg": "ok", "count": len(items)})
+            self._log_op('批量初始化词条', f'共{count}/{len(items)}条')
+            self._send_json(200, {"msg": "ok", "count": count})
             return
 
         if path == '/api/init_roots':
             items = data if isinstance(data, list) else data.get('roots', [])
             conn = get_db()
-            for r in items:
-                examples = r.get('examples', [])
-                if isinstance(examples, list):
-                    examples = json.dumps(examples, ensure_ascii=False)
-                conn.execute(
-                    """INSERT INTO roots(name,en,mean,src,cat,status,examples)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (r.get('name',''), r.get('en',''), r.get('mean',''),
-                     r.get('src',''), r.get('cat',''),
-                     r.get('status','approved'), examples)
-                )
+            count = 0
+            for i, r in enumerate(items):
+                try:
+                    examples = r.get('examples', [])
+                    if isinstance(examples, list):
+                        examples = json.dumps(examples, ensure_ascii=False)
+                    conn.execute(
+                        """INSERT INTO roots(name,en,mean,src,cat,status,examples)
+                           VALUES(?,?,?,?,?,?,?)""",
+                        (r.get('name',''), r.get('en',''), r.get('mean',''),
+                         r.get('src',''), r.get('cat',''),
+                         r.get('status','approved'), examples)
+                    )
+                    count += 1
+                except Exception as e:
+                    write_log(f'导入词根失败: {e}, name={r.get("name","")}, en={r.get("en","")}')
+                if (i + 1) % 100 == 0:
+                    conn.commit()
             conn.commit()
             conn.close()
-            self._log_op('批量初始化词根', f'共{len(items)}条')
-            self._send_json(200, {"msg": "ok", "count": len(items)})
+            self._log_op('批量初始化词根', f'共{count}/{len(items)}条')
+            self._send_json(200, {"msg": "ok", "count": count})
             return
 
         # ========== 数据资产整改 API ==========
