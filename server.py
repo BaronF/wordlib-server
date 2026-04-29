@@ -1889,7 +1889,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for i, w in enumerate(items):
                 try:
                     if USE_PG:
-                        conn._conn.cursor().execute("SAVEPOINT sp_import")
+                        conn.execute("SAVEPOINT sp_import")
                     conn.execute(
                         """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1902,9 +1902,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     count += 1
                 except Exception as e:
                     if USE_PG:
-                        try: conn._conn.cursor().execute("ROLLBACK TO SAVEPOINT sp_import")
+                        try: conn.execute("ROLLBACK TO SAVEPOINT sp_import")
                         except: pass
-                    errors.append(f'{w.get("cn","")}/{w.get("en","")}: {e}')
+                    errors.append(str(e)[:100])
                 if (i + 1) % 200 == 0:
                     try: conn.commit()
                     except: pass
@@ -1913,7 +1913,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn.close()
             self._log_op('批量初始化词条', f'成功{count}/{len(items)}条' + (f', 失败{len(errors)}条' if errors else ''))
             if errors:
-                write_log(f'导入词条错误: {errors[:5]}')
+                write_log(f'导入词条错误样本: {errors[:3]}')
             self._send_json(200, {"msg": "ok", "count": count, "errors": len(errors)})
             return
 
@@ -1924,7 +1924,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for i, r in enumerate(items):
                 try:
                     if USE_PG:
-                        conn._conn.cursor().execute("SAVEPOINT sp_import_r")
+                        conn.execute("SAVEPOINT sp_import_r")
                     examples = r.get('examples', [])
                     if isinstance(examples, list):
                         examples = json.dumps(examples, ensure_ascii=False)
@@ -1938,7 +1938,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     count += 1
                 except Exception as e:
                     if USE_PG:
-                        try: conn._conn.cursor().execute("ROLLBACK TO SAVEPOINT sp_import_r")
+                        try: conn.execute("ROLLBACK TO SAVEPOINT sp_import_r")
                         except: pass
                     write_log(f'导入词根失败: {e}, name={r.get("name","")}, en={r.get("en","")}')
                 if (i + 1) % 200 == 0:
