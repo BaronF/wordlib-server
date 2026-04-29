@@ -274,6 +274,11 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <div class="fg"><label>词根组合</label><input id="f_roots" placeholder='例如：["时间-时间"]'></div>
         <div class="fg"><label>参考表</label><input id="f_ref" placeholder="参考数据表名"></div>
       </div>
+      <div class="frow">
+        <div class="fg"><label>字段类型</label><input id="f_dataType" placeholder="例如：VARCHAR、INTEGER、DECIMAL"></div>
+        <div class="fg"><label>字段长度</label><input id="f_dataLen" placeholder="例如：50、10,2"></div>
+      </div>
+      <div class="fg"><label>枚举值</label><textarea id="f_enumValues" rows="2" placeholder="例如：0=未处理, 1=处理中, 2=已完成"></textarea></div>
       <div id="compareResult" style="display:none;margin-top:16px"></div>
       <div id="similarityHint" style="display:none;margin-top:12px;padding:12px 16px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;font-size:13px;color:#f59e0b"></div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
@@ -1110,6 +1115,9 @@ function showDetail(id) {
       '<span style="color:var(--text3)">英文描述</span><span style="color:var(--text2)">' + (w.enDesc || '—') + '</span>' +
       '<span style="color:var(--text3)">备注</span><span style="color:var(--text2)">' + (w.abbr || '—') + '</span>' +
       '<span style="color:var(--text3)">参考表</span><span style="color:var(--text2);font-family:monospace;font-size:13px">' + (w.ref || '—') + '</span>' +
+      '<span style="color:var(--text3)">字段类型</span><span style="color:var(--text2);font-family:monospace">' + (w.dataType || '—') + '</span>' +
+      '<span style="color:var(--text3)">字段长度</span><span style="color:var(--text2);font-family:monospace">' + (w.dataLen || '—') + '</span>' +
+      '<span style="color:var(--text3)">枚举值</span><span style="color:var(--text2);font-size:12px">' + (w.enumValues || '—') + '</span>' +
       '<span style="color:var(--text3)">热度</span><span style="color:var(--text2)">' + w.score.toFixed(2) + '</span>' +
       '<span style="color:var(--text3)">状态</span><span style="font-weight:600;color:' + (statusColor[w.status]||'var(--text2)') + '">' + (statusMap[w.status]||w.status) + '</span>' +
       '<span style="color:var(--text3)">更新时间</span><span style="color:var(--text3)">' + w.time + '</span>' +
@@ -1222,7 +1230,11 @@ function saveWordDirect() {
 function doSaveDirect(cn, en, cat, roots, cnDesc) {
   var wData = { cn: cn, en: en, cat: cat, roots: roots, score: +(Math.random() * 10 + 40).toFixed(2),
     abbr: document.getElementById('f_abbr').value.trim(), cnDesc: cnDesc, enDesc: document.getElementById('f_enDesc').value.trim(),
-    ref: document.getElementById('f_ref').value.trim(), status: 'draft', time: new Date().toISOString().slice(0, 10) };
+    ref: document.getElementById('f_ref').value.trim(),
+    dataType: document.getElementById('f_dataType').value.trim(),
+    dataLen: document.getElementById('f_dataLen').value.trim(),
+    enumValues: document.getElementById('f_enumValues').value.trim(),
+    status: 'draft', time: new Date().toISOString().slice(0, 10) };
   if (editingId) {
     wData.status = words.find(function(x){return x.id===editingId;}) ? words.find(function(x){return x.id===editingId;}).status : 'draft';
     apiCall('PUT', '/api/words/' + editingId, wData, function(resp) {
@@ -1260,7 +1272,11 @@ function submitWord() {
 function doSubmit(cn, en, cat, roots, cnDesc) {
   var wData = { cn: cn, en: en, cat: cat, roots: roots, score: +(Math.random() * 10 + 40).toFixed(2),
     abbr: document.getElementById('f_abbr').value.trim(), cnDesc: cnDesc, enDesc: document.getElementById('f_enDesc').value.trim(),
-    ref: document.getElementById('f_ref').value.trim(), status: 'pending', time: new Date().toISOString().slice(0, 10) };
+    ref: document.getElementById('f_ref').value.trim(),
+    dataType: document.getElementById('f_dataType').value.trim(),
+    dataLen: document.getElementById('f_dataLen').value.trim(),
+    enumValues: document.getElementById('f_enumValues').value.trim(),
+    status: 'pending', time: new Date().toISOString().slice(0, 10) };
   if (editingId) {
     apiCall('PUT', '/api/words/' + editingId, wData, function(resp) {
       wData.id = editingId;
@@ -1280,7 +1296,7 @@ function doSubmit(cn, en, cat, roots, cnDesc) {
 }
 
 function clearForm() {
-  ['f_cn','f_en','f_abbr','f_roots','f_cnDesc','f_enDesc','f_ref'].forEach(function(id) { document.getElementById(id).value = ''; });
+  ['f_cn','f_en','f_abbr','f_roots','f_cnDesc','f_enDesc','f_ref','f_dataType','f_dataLen','f_enumValues'].forEach(function(id) { var el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('f_cat').selectedIndex = 0;
   editingId = null;
   document.getElementById('compareResult').style.display = 'none';
@@ -1299,6 +1315,9 @@ function editWord(id) {
   document.getElementById('f_cnDesc').value = w.cnDesc || '';
   document.getElementById('f_enDesc').value = w.enDesc || '';
   document.getElementById('f_ref').value = w.ref || '';
+  if (document.getElementById('f_dataType')) document.getElementById('f_dataType').value = w.dataType || '';
+  if (document.getElementById('f_dataLen')) document.getElementById('f_dataLen').value = w.dataLen || '';
+  if (document.getElementById('f_enumValues')) document.getElementById('f_enumValues').value = w.enumValues || '';
   var catSel = document.getElementById('f_cat');
   for (var i = 0; i < catSel.options.length; i++) { if (catSel.options[i].value === w.cat) { catSel.selectedIndex = i; break; } }
   switchTab('add');
@@ -1329,7 +1348,10 @@ function showWordEditModal(id) {
       '<div class="fg"><label>英文描述</label><textarea id="we_enDesc" rows="2">'+(w.enDesc||'')+'</textarea></div>' +
       '<div class="fg"><label>词根组合</label><input id="we_roots" value="'+(w.roots||'').replace(/"/g,'&quot;')+'"></div>' +
       '<div class="fg"><label>参考表</label><input id="we_ref" value="'+(w.ref||'').replace(/"/g,'&quot;')+'"></div>' +
+      '<div class="fg"><label>字段类型</label><input id="we_dataType" value="'+(w.dataType||'').replace(/"/g,'&quot;')+'" placeholder="VARCHAR、INTEGER、DECIMAL"></div>' +
+      '<div class="fg"><label>字段长度</label><input id="we_dataLen" value="'+(w.dataLen||'').replace(/"/g,'&quot;')+'" placeholder="50、10,2"></div>' +
     '</div>' +
+    '<div class="fg" style="margin-top:14px"><label>枚举值</label><textarea id="we_enumValues" rows="2" placeholder="0=未处理, 1=处理中, 2=已完成">'+(w.enumValues||'')+'</textarea></div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">' +
       '<button class="btn ghost" onclick="document.getElementById(\'wordEditOverlay\').remove()">取消</button>' +
       '<button class="btn primary" onclick="doWordEditSave('+w.id+')">💾 保存</button>' +
@@ -1355,6 +1377,9 @@ function doWordEditSave(id) {
     cnDesc: document.getElementById('we_cnDesc').value.trim(),
     enDesc: document.getElementById('we_enDesc').value.trim(),
     ref: document.getElementById('we_ref').value.trim(),
+    dataType: document.getElementById('we_dataType').value.trim(),
+    dataLen: document.getElementById('we_dataLen').value.trim(),
+    enumValues: document.getElementById('we_enumValues').value.trim(),
     status: w ? w.status : 'draft',
     time: new Date().toISOString().slice(0, 10)
   };

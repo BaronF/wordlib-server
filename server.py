@@ -46,10 +46,13 @@ class PgCursorWrapper:
         sql = sql.replace("date('now','start of month')", "DATE_TRUNC('month', CURRENT_DATE)::date")
         # PostgreSQL 大小写敏感列名处理
         import re as _re
-        # 在非建表语句中，给 cnDesc/enDesc 加引号
+        # 在非建表语句中，给 cnDesc/enDesc/dataType/dataLen/enumValues 加引号
         if 'CREATE TABLE' not in sql.upper():
             sql = _re.sub(r'\bcnDesc\b', '"cnDesc"', sql)
             sql = _re.sub(r'\benDesc\b', '"enDesc"', sql)
+            sql = _re.sub(r'\bdataType\b', '"dataType"', sql)
+            sql = _re.sub(r'\bdataLen\b', '"dataLen"', sql)
+            sql = _re.sub(r'\benumValues\b', '"enumValues"', sql)
         self._cursor.execute(sql, params or ())
         # 获取 lastrowid（INSERT 时）
         if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
@@ -202,6 +205,9 @@ def get_db():
                 "cnDesc" TEXT DEFAULT '',
                 "enDesc" TEXT DEFAULT '',
                 ref TEXT DEFAULT '',
+                "dataType" TEXT DEFAULT '',
+                "dataLen" TEXT DEFAULT '',
+                "enumValues" TEXT DEFAULT '',
                 status TEXT DEFAULT 'draft',
                 time TEXT DEFAULT CURRENT_DATE,
                 deleted INTEGER DEFAULT 0,
@@ -311,6 +317,9 @@ def get_db():
                 cnDesc TEXT DEFAULT '',
                 enDesc TEXT DEFAULT '',
                 ref TEXT DEFAULT '',
+                dataType TEXT DEFAULT '',
+                dataLen TEXT DEFAULT '',
+                enumValues TEXT DEFAULT '',
                 status TEXT DEFAULT 'draft',
                 time TEXT DEFAULT (date('now','localtime'))
             )
@@ -410,6 +419,14 @@ def get_db():
             except:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER DEFAULT 0")
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted_time TEXT")
+        # 自动迁移：words 表新增技术属性字段
+        for col in ('dataType', 'dataLen', 'enumValues'):
+            try:
+                conn.execute(f"SELECT {col} FROM words LIMIT 1")
+            except:
+                try:
+                    conn.execute(f"ALTER TABLE words ADD COLUMN {col} TEXT DEFAULT ''")
+                except: pass
         _init_admin_account(conn)
         conn.commit()
         return conn
@@ -667,7 +684,7 @@ def _extract_roots_from_xlsx(filepath):
             'cn': cn, 'en': en, 'cat': cat,
             'roots': json.dumps([cn + '-' + cn], ensure_ascii=False),
             'score': 0, 'abbr': '', 'cnDesc': '', 'enDesc': '',
-            'ref': '', 'status': 'draft',
+            'ref': '', 'dataType': '', 'dataLen': '', 'enumValues': '', 'status': 'draft',
             'time': datetime.datetime.now().strftime('%Y-%m-%d')
         })
 
@@ -1758,11 +1775,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/api/words':
             conn = get_db()
             cur = conn.execute(
-                """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,status,time)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data.get('cn',''), data.get('en',''), data.get('cat',''),
                  data.get('roots',''), data.get('score',0), data.get('abbr',''),
                  data.get('cnDesc',''), data.get('enDesc',''), data.get('ref',''),
+                 data.get('dataType',''), data.get('dataLen',''), data.get('enumValues',''),
                  data.get('status','draft'), data.get('time',''))
             )
             conn.commit()
@@ -1797,11 +1815,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = get_db()
             for w in items:
                 conn.execute(
-                    """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,status,time)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (w.get('cn',''), w.get('en',''), w.get('cat',''),
                      w.get('roots',''), w.get('score',0), w.get('abbr',''),
                      w.get('cnDesc',''), w.get('enDesc',''), w.get('ref',''),
+                     w.get('dataType',''), w.get('dataLen',''), w.get('enumValues',''),
                      w.get('status','approved'), w.get('time',''))
                 )
             conn.commit()
@@ -1862,10 +1881,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _create_word_version(conn, wid, old_data, op_type)
             conn.execute(
                 """UPDATE words SET cn=?,en=?,cat=?,roots=?,score=?,abbr=?,
-                   cnDesc=?,enDesc=?,ref=?,status=?,time=? WHERE id=?""",
+                   cnDesc=?,enDesc=?,ref=?,dataType=?,dataLen=?,enumValues=?,status=?,time=? WHERE id=?""",
                 (data.get('cn',''), data.get('en',''), data.get('cat',''),
                  data.get('roots',''), data.get('score',0), data.get('abbr',''),
                  data.get('cnDesc',''), data.get('enDesc',''), data.get('ref',''),
+                 data.get('dataType',''), data.get('dataLen',''), data.get('enumValues',''),
                  data.get('status',''), data.get('time',''), wid)
             )
             conn.commit()
