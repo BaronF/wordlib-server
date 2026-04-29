@@ -734,7 +734,15 @@ function loadFromStorage() {
   try {
     var data = apiCallSync('GET', '/api/words?size=9999');
     if (data && data.data && data.data.length > 0) {
-      words = data.data;
+      words = data.data.map(function(w) {
+        // PostgreSQL 列名小写兼容
+        if (!w.dataType && w.datatype) w.dataType = w.datatype;
+        if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
+        if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
+        if (!w.cnDesc && w.cndesc) w.cnDesc = w.cndesc;
+        if (!w.enDesc && w.endesc) w.enDesc = w.endesc;
+        return w;
+      });
       nextId = Math.max.apply(null, words.map(function(w){return w.id;})) + 1;
       return;
     }
