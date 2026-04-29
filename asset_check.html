@@ -748,6 +748,9 @@ function renderResult() {
   state.fmt.forEach(function(f){if(!fmtByType[f.type])fmtByType[f.type]=[];fmtByType[f.type].push(f)});
   var icons={'表名重复':'🔄','字段名重复':'🔄','类型缺长度':'📏','字段名不规范':'⚠️','表名不规范':'⚠️','空字段名':'❌','空表名':'❌','主键缺失':'🔑','类型不规范':'📋','字段类型不一致':'🔀','字段长度不一致':'📐','跨文档表名冲突':'🔗','跨文档字段类型不一致':'🔗','表名缺失':'❓'};
 
+  // 异步加载词条库数据做字段匹配校验
+  loadWordlibMatch();
+
   var html = '<div class="toolbar"><button class="btn" onclick="render()">← 重新选择文件</button><button class="btn-p btn" onclick="exportExcel()">📥 导出校验报告 Excel</button></div>';
   // 统计
   html += '<div class="stats">';
@@ -759,6 +762,9 @@ function renderResult() {
   var revCount = (state.revisions || []).length;
   if (revCount > 0) html += '<div class="stat"><div class="val" style="color:var(--p)">'+revCount+'</div><div class="label">修订标记</div></div>';
   html += '</div>';
+
+  // 词条库匹配校验占位
+  html += '<div id="wordlibMatchSection"></div>';
 
   // 格式校验
   if (fmtN > 0) {
@@ -816,6 +822,75 @@ function renderResult() {
   }
 
   document.getElementById('app').innerHTML = html;
+}
+
+// ========== 词条库字段匹配校验 ==========
+function loadWordlibMatch() {
+  // 通过父页面的 authFetch 获取已发布词条
+  var fetchFn = null;
+  try {
+    if (window.parent && window.parent.authFetch) fetchFn = window.parent.authFetch;
+  } catch(e) {}
+  if (!fetchFn) {
+    // 尝试直接用 fetch + token
+    var token = '';
+    try { token = window.parent.localStorage.getItem('wordlib_token') || ''; } catch(e) {}
+    if (!token) try { token = localStorage.getItem('wordlib_token') || ''; } catch(e) {}
+    if (!token) return; // 无法获取词条数据
+    fetchFn = function(url) {
+      return fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    };
+  }
+  fetchFn('/api/words?status=approved&size=9999').then(function(r) { return r.json(); }).then(function(resp) {
+    var wordList = resp.data || resp || [];
+    if (!wordList.length || !state.l5.length) return;
+    // 构建词条英文名集合（小写）
+    var wordEnSet = {};
+    wordList.forEach(function(w) {
+      if (w.en) wordEnSet[w.en.toLowerCase()] = w;
+    });
+    // 匹配 L5 字段
+    var matched = [], unmatched = [];
+    var seenEn = {};
+    state.l5.forEach(function(a) {
+      if (!a.en) return;
+      var enLower = a.en.toLowerCase();
+      if (seenEn[enLower]) return;
+      seenEn[enLower] = true;
+      if (wordEnSet[enLower]) {
+        matched.push({ en: a.en, cn: a.cn, tbl: a.tbl_cn || a.tbl_en || '', wordCn: wordEnSet[enLower].cn });
+      } else {
+        unmatched.push({ en: a.en, cn: a.cn, tbl: a.tbl_cn || a.tbl_en || '' });
+      }
+    });
+    // 渲染结果
+    var el = document.getElementById('wordlibMatchSection');
+    if (!el) return;
+    var total = matched.length + unmatched.length;
+    var matchPct = total > 0 ? (matched.length / total * 100).toFixed(1) : '0.0';
+    var html = '<div class="section" style="margin-bottom:16px"><div class="section-hd">📚 词条库匹配校验 <span class="badge" style="background:' + (unmatched.length > 0 ? 'var(--w)' : 'var(--s)') + '">' + matchPct + '% 匹配</span></div><div class="section-bd" style="max-height:350px">';
+    html += '<div style="padding:10px 18px;background:#f8f9fa;border-bottom:1px solid var(--border);font-size:12px;color:var(--text2)">共 <b>' + total + '</b> 个唯一字段，<b style="color:var(--s)">' + matched.length + '</b> 个已在词条库中，<b style="color:var(--d)">' + unmatched.length + '</b> 个未收录</div>';
+    if (unmatched.length > 0) {
+      html += '<div class="issue-group"><div class="issue-group-hd">❌ 未收录字段 <span class="cnt">(' + unmatched.length + '个)</span></div>';
+      unmatched.slice(0, 30).forEach(function(u) {
+        html += '<div class="issue-item"><code>' + u.en + '</code>' + (u.cn ? '（' + u.cn + '）' : '') + (u.tbl ? ' <span style="color:var(--text3)">← ' + u.tbl + '</span>' : '') + '</div>';
+      });
+      if (unmatched.length > 30) html += '<div class="issue-item" style="color:var(--text3)">...共 ' + unmatched.length + ' 个未收录</div>';
+      html += '</div>';
+    }
+    if (matched.length > 0) {
+      html += '<div class="issue-group"><div class="issue-group-hd">✅ 已收录字段 <span class="cnt">(' + matched.length + '个)</span></div>';
+      matched.slice(0, 15).forEach(function(m) {
+        html += '<div class="issue-item" style="color:var(--s)"><code>' + m.en + '</code>（' + m.cn + '）→ 词条库：' + m.wordCn + '</div>';
+      });
+      if (matched.length > 15) html += '<div class="issue-item" style="color:var(--text3)">...共 ' + matched.length + ' 个已收录</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+    el.innerHTML = html;
+  }).catch(function(e) {
+    console.log('词条库匹配校验失败:', e);
+  });
 }
 </script>
 <script>

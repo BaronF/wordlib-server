@@ -306,6 +306,8 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <button class="btn success" style="padding:5px 14px;font-size:12px" onclick="batchApprove('approved')">✅ 批量通过</button>
         <button class="btn danger" style="padding:5px 14px;font-size:12px" onclick="batchApprove('rejected')">❌ 批量驳回</button>
         <button class="btn" style="padding:5px 14px;font-size:12px;background:var(--primary);color:#fff;border:none" onclick="batchApproveAll()">🚀 一键全部发布</button>
+        <button class="btn" style="padding:5px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px" onclick="batchWordAction('offline')">🔒 批量下线</button>
+        <button class="btn danger" style="padding:5px 14px;font-size:12px" onclick="batchWordAction('delete')">🗑️ 批量删除</button>
         <span style="flex:1"></span>
         <button class="btn ghost" style="padding:5px 14px;font-size:12px" onclick="showImportLogs()">📋 导入日志</button>
       </div>
@@ -324,6 +326,13 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
     </div>
     <!-- 词根审核 -->
     <div id="auditRootPanel">
+      <!-- 词根批量操作栏（仅admin） -->
+      <div id="rootBatchBar" style="display:none;align-items:center;gap:10px;margin-bottom:12px;padding:10px 16px;background:var(--bg3);border-radius:8px;border:1px solid var(--border)">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;color:var(--text2)"><input type="checkbox" id="rootBatchSelectAll" onchange="toggleRootBatchSelectAll(this.checked)" style="accent-color:var(--primary);cursor:pointer"> 全选已发布</label>
+        <span id="rootBatchSelectedCount" style="font-size:12px;color:var(--text3)">已选 0 条</span>
+        <button class="btn" style="padding:5px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px" onclick="rootBatchAction('offline')">🔒 批量下线</button>
+        <button class="btn danger" style="padding:5px 14px;font-size:12px" onclick="rootBatchAction('delete')">🗑️ 批量删除</button>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="form-card">
           <h3 style="font-size:16px;margin-bottom:16px;color:var(--text);display:flex;align-items:center;gap:8px">📝 待审核词根 <span id="rootPendingCountLabel" style="font-size:12px;color:#fff;background:#ef4444;padding:2px 8px;border-radius:10px;font-weight:500">0</span></h3>
@@ -1456,6 +1465,9 @@ function renderRootAudit() {
   var doneBody = document.getElementById('auditRootDoneBody');
   var pendingEmpty = document.getElementById('rootPendingEmpty');
   var auditedEmpty = document.getElementById('rootAuditedEmpty');
+  // 显示/隐藏批量操作栏
+  var rootBatchBarEl = document.getElementById('rootBatchBar');
+  if (rootBatchBarEl) rootBatchBarEl.style.display = isAdmin ? 'flex' : 'none';
   pendingBody.innerHTML = ''; doneBody.innerHTML = '';
   var pendingList = roots.filter(function(r) { return r.status === 'draft' || r.status === 'pending'; });
   var doneList = roots.filter(function(r) { return r.status === 'approved' || r.status === 'offline' || r.status === 'rejected'; });
@@ -1502,9 +1514,15 @@ function buildRootAuditRow(r) {
               '<button class="btn danger" onclick="deleteRoot('+r.id+')">删除</button>';
   } else { actions = '<span style="color:var(--text3);font-size:12px">—</span>'; }
   var exHtml = (r.examples||[]).slice(0,3).map(function(ex){return '<span style="padding:1px 6px;border-radius:4px;font-size:10px;background:var(--border);color:var(--text3)">'+ex+'</span>';}).join(' ');
+  var rootCheckbox = '';
+  if (isAdmin && (r.status === 'approved' || r.status === 'offline' || r.status === 'rejected')) {
+    var checked = rootBatchSelectedIds.indexOf(r.id) >= 0 ? ' checked' : '';
+    rootCheckbox = '<input type="checkbox" class="root-batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleRootBatchItem(' + r.id + ',this.checked)">';
+  }
   return '<div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid '+statusBorder+';border-radius:10px;padding:14px 16px;transition:all .2s" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.borderLeftColor=\''+statusBorder+'\'">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
       '<div style="display:flex;align-items:center;gap:8px">' +
+        rootCheckbox +
         '<span style="font-weight:800;font-size:15px;color:var(--primary);font-family:Courier New,monospace;text-transform:uppercase">'+r.en+'</span>' +
         '<span style="font-weight:600;font-size:14px;color:var(--text)">'+r.name+'</span>' +
         '<span style="font-size:12px;color:var(--text3)">'+r.mean+'</span>' +
@@ -1589,6 +1607,9 @@ function buildAuditRow(w) {
   } else { actions = '<span style="color:var(--text3);font-size:12px">—</span>'; }
   var batchCheckbox = '';
   if (w.status === 'pending' || w.status === 'draft') {
+    var checked = batchSelectedIds.indexOf(w.id) >= 0 ? ' checked' : '';
+    batchCheckbox = '<input type="checkbox" class="batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleBatchItem(' + w.id + ',this.checked)">';
+  } else if (isAdmin && (w.status === 'approved' || w.status === 'offline' || w.status === 'rejected')) {
     var checked = batchSelectedIds.indexOf(w.id) >= 0 ? ' checked' : '';
     batchCheckbox = '<input type="checkbox" class="batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleBatchItem(' + w.id + ',this.checked)">';
   }
@@ -3537,6 +3558,64 @@ function batchApproveAll() {
         updatePendingBadge();
       }
     });
+  });
+}
+
+// ===== 词条批量下线/删除 =====
+function batchWordAction(action) {
+  if (!batchSelectedIds.length) { showToast('请先选择词条', '#ef4444'); return; }
+  var label = action === 'offline' ? '下线' : '删除';
+  if (!confirm('确定要批量' + label + ' ' + batchSelectedIds.length + ' 条词条吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
+  var done = 0, total = batchSelectedIds.length;
+  showToast('正在批量' + label + '...', 'var(--primary)');
+  batchSelectedIds.forEach(function(id) {
+    if (action === 'delete') {
+      apiCall('DELETE', '/api/words/' + id, null, function() {
+        var w = words.find(function(x) { return x.id === id; });
+        if (w) { w.deleted = 1; w.status = 'deleted'; }
+        done++;
+        if (done >= total) { batchSelectedIds = []; updateBatchCount(); loadFromStorage(); renderAudit(); updatePendingBadge(); showToast('批量删除完成', '#22c55e'); }
+      });
+    } else {
+      var w = words.find(function(x) { return x.id === id; });
+      if (w) { w.status = 'offline'; apiCall('PUT', '/api/words/' + id, w, function() { done++; if (done >= total) { batchSelectedIds = []; updateBatchCount(); renderAudit(); updatePendingBadge(); showToast('批量下线完成', '#22c55e'); } }); }
+      else { done++; }
+    }
+  });
+}
+
+// ===== 词根批量操作 =====
+var rootBatchSelectedIds = [];
+function toggleRootBatchSelectAll(checked) {
+  rootBatchSelectedIds = [];
+  if (checked) { roots.forEach(function(r) { if (r.status === 'approved') rootBatchSelectedIds.push(r.id); }); }
+  document.getElementById('rootBatchSelectedCount').textContent = '已选 ' + rootBatchSelectedIds.length + ' 条';
+  document.querySelectorAll('.root-batch-checkbox').forEach(function(cb) { cb.checked = checked; });
+}
+function toggleRootBatchItem(id, checked) {
+  if (checked) { if (rootBatchSelectedIds.indexOf(id) === -1) rootBatchSelectedIds.push(id); }
+  else { rootBatchSelectedIds = rootBatchSelectedIds.filter(function(x) { return x !== id; }); }
+  document.getElementById('rootBatchSelectedCount').textContent = '已选 ' + rootBatchSelectedIds.length + ' 条';
+}
+function rootBatchAction(action) {
+  if (!rootBatchSelectedIds.length) { showToast('请先选择词根', '#ef4444'); return; }
+  var label = action === 'offline' ? '下线' : '删除';
+  if (!confirm('确定要批量' + label + ' ' + rootBatchSelectedIds.length + ' 个词根吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
+  var done = 0, total = rootBatchSelectedIds.length;
+  showToast('正在批量' + label + '...', 'var(--primary)');
+  rootBatchSelectedIds.forEach(function(id) {
+    if (action === 'delete') {
+      apiCall('DELETE', '/api/roots/' + id, null, function() {
+        var r = roots.find(function(x) { return x.id === id; });
+        if (r) { r.deleted = 1; r.status = 'deleted'; }
+        done++;
+        if (done >= total) { rootBatchSelectedIds = []; loadFromStorage(); renderAudit(); renderRoots(); showToast('批量删除完成', '#22c55e'); }
+      });
+    } else {
+      var r = roots.find(function(x) { return x.id === id; });
+      if (r) { r.status = 'offline'; apiCall('PUT', '/api/roots/' + id, r, function() { done++; if (done >= total) { rootBatchSelectedIds = []; renderAudit(); renderRoots(); showToast('批量下线完成', '#22c55e'); } }); }
+      else { done++; }
+    }
   });
 }
 
