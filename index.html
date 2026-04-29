@@ -319,6 +319,12 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         </div>
         <div class="form-card">
           <h3 style="font-size:16px;margin-bottom:16px;color:var(--text);display:flex;align-items:center;gap:8px">📋 已审核词条 <span id="auditedCountLabel" style="font-size:12px;color:#fff;background:var(--primary);padding:2px 8px;border-radius:10px;font-weight:500">0</span></h3>
+          <div id="auditedBatchBar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:var(--bg3);border-radius:6px;border:1px solid var(--border);font-size:12px">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text2)"><input type="checkbox" id="auditedSelectAll" onchange="toggleAuditedSelectAll(this.checked)" style="accent-color:var(--primary);cursor:pointer"> 全选</label>
+            <span id="auditedSelectedCount" style="color:var(--text3)">已选 0 条</span>
+            <button class="btn" style="padding:3px 10px;font-size:11px;background:#f59e0b;color:#fff;border:none;border-radius:4px" onclick="auditedBatchAction('offline')">🔒 下线</button>
+            <button class="btn danger" style="padding:3px 10px;font-size:11px;border-radius:4px" onclick="auditedBatchAction('delete')">🗑️ 删除</button>
+          </div>
           <div id="auditDoneBody" style="display:flex;flex-direction:column;gap:10px;max-height:65vh;overflow-y:auto"></div>
           <div id="auditedEmpty" style="display:none;text-align:center;padding:40px;color:var(--text3);font-size:13px">暂无已审核词条</div>
         </div>
@@ -341,6 +347,12 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         </div>
         <div class="form-card">
           <h3 style="font-size:16px;margin-bottom:16px;color:var(--text);display:flex;align-items:center;gap:8px">📋 已审核词根 <span id="rootAuditedCountLabel" style="font-size:12px;color:#fff;background:var(--primary);padding:2px 8px;border-radius:10px;font-weight:500">0</span></h3>
+          <div id="rootAuditedBatchBar" style="display:none;align-items:center;gap:8px;margin-bottom:10px;padding:8px 12px;background:var(--bg3);border-radius:6px;border:1px solid var(--border);font-size:12px">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text2)"><input type="checkbox" id="rootAuditedSelectAll" onchange="toggleRootAuditedSelectAll(this.checked)" style="accent-color:var(--primary);cursor:pointer"> 全选</label>
+            <span id="rootAuditedSelectedCount" style="color:var(--text3)">已选 0 条</span>
+            <button class="btn" style="padding:3px 10px;font-size:11px;background:#f59e0b;color:#fff;border:none;border-radius:4px" onclick="rootAuditedBatchAction('offline')">🔒 下线</button>
+            <button class="btn danger" style="padding:3px 10px;font-size:11px;border-radius:4px" onclick="rootAuditedBatchAction('delete')">🗑️ 删除</button>
+          </div>
           <div id="auditRootDoneBody" style="display:flex;flex-direction:column;gap:10px;max-height:65vh;overflow-y:auto"></div>
           <div id="rootAuditedEmpty" style="display:none;text-align:center;padding:40px;color:var(--text3);font-size:13px">暂无已审核词根</div>
         </div>
@@ -1441,6 +1453,9 @@ function renderAudit() {
   else { pendingEmpty.style.display = 'none'; pendingList.forEach(function(w) { pendingBody.insertAdjacentHTML('beforeend', buildAuditRow(w)); }); }
   if (!doneList.length) { auditedEmpty.style.display = 'block'; }
   else { auditedEmpty.style.display = 'none'; doneList.forEach(function(w) { doneBody.insertAdjacentHTML('beforeend', buildAuditRow(w)); }); }
+  // 已审核词条批量操作栏仅admin可见
+  var auditedBar = document.getElementById('auditedBatchBar');
+  if (auditedBar) auditedBar.style.display = isAdmin ? 'flex' : 'none';
   // 词根审核
   renderRootAudit();
   // 更新 tab 上的计数
@@ -1479,6 +1494,9 @@ function renderRootAudit() {
   else { pendingEmpty.style.display = 'none'; pendingList.forEach(function(r) { pendingBody.insertAdjacentHTML('beforeend', buildRootAuditRow(r)); }); }
   if (!doneList.length) { auditedEmpty.style.display = 'block'; }
   else { auditedEmpty.style.display = 'none'; doneList.forEach(function(r) { doneBody.insertAdjacentHTML('beforeend', buildRootAuditRow(r)); }); }
+  // 已审核词根批量操作栏仅admin可见
+  var rootAuditedBar = document.getElementById('rootAuditedBatchBar');
+  if (rootAuditedBar) rootAuditedBar.style.display = isAdmin ? 'flex' : 'none';
 }
 
 function buildRootAuditRow(r) {
@@ -1516,8 +1534,8 @@ function buildRootAuditRow(r) {
   var exHtml = (r.examples||[]).slice(0,3).map(function(ex){return '<span style="padding:1px 6px;border-radius:4px;font-size:10px;background:var(--border);color:var(--text3)">'+ex+'</span>';}).join(' ');
   var rootCheckbox = '';
   if (isAdmin && (r.status === 'approved' || r.status === 'offline' || r.status === 'rejected')) {
-    var checked = rootBatchSelectedIds.indexOf(r.id) >= 0 ? ' checked' : '';
-    rootCheckbox = '<input type="checkbox" class="root-batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleRootBatchItem(' + r.id + ',this.checked)">';
+    var checked = rootAuditedSelectedIds.indexOf(r.id) >= 0 ? ' checked' : '';
+    rootCheckbox = '<input type="checkbox" class="root-audited-batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleRootAuditedItem(' + r.id + ',this.checked)">';
   }
   return '<div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid '+statusBorder+';border-radius:10px;padding:14px 16px;transition:all .2s" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.borderLeftColor=\''+statusBorder+'\'">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
@@ -1610,8 +1628,8 @@ function buildAuditRow(w) {
     var checked = batchSelectedIds.indexOf(w.id) >= 0 ? ' checked' : '';
     batchCheckbox = '<input type="checkbox" class="batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleBatchItem(' + w.id + ',this.checked)">';
   } else if (isAdmin && (w.status === 'approved' || w.status === 'offline' || w.status === 'rejected')) {
-    var checked = batchSelectedIds.indexOf(w.id) >= 0 ? ' checked' : '';
-    batchCheckbox = '<input type="checkbox" class="batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleBatchItem(' + w.id + ',this.checked)">';
+    var checked = auditedSelectedIds.indexOf(w.id) >= 0 ? ' checked' : '';
+    batchCheckbox = '<input type="checkbox" class="audited-batch-checkbox" style="accent-color:var(--primary);cursor:pointer;margin-right:6px"' + checked + ' onchange="toggleAuditedItem(' + w.id + ',this.checked)">';
   }
   return '<div style="background:var(--bg3);border:1px solid var(--border);border-left:3px solid '+statusBorder+';border-radius:10px;padding:14px 16px;transition:all .2s" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\';this.style.borderLeftColor=\''+statusBorder+'\'">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
@@ -3614,6 +3632,66 @@ function rootBatchAction(action) {
     } else {
       var r = roots.find(function(x) { return x.id === id; });
       if (r) { r.status = 'offline'; apiCall('PUT', '/api/roots/' + id, r, function() { done++; if (done >= total) { rootBatchSelectedIds = []; renderAudit(); renderRoots(); showToast('批量下线完成', '#22c55e'); } }); }
+      else { done++; }
+    }
+  });
+}
+
+// ===== 已审核词条批量操作 =====
+var auditedSelectedIds = [];
+function toggleAuditedSelectAll(checked) {
+  auditedSelectedIds = [];
+  if (checked) { words.forEach(function(w) { if (w.status === 'approved' || w.status === 'offline' || w.status === 'rejected') auditedSelectedIds.push(w.id); }); }
+  document.getElementById('auditedSelectedCount').textContent = '已选 ' + auditedSelectedIds.length + ' 条';
+  document.querySelectorAll('.audited-batch-checkbox').forEach(function(cb) { cb.checked = checked; });
+}
+function toggleAuditedItem(id, checked) {
+  if (checked) { if (auditedSelectedIds.indexOf(id) === -1) auditedSelectedIds.push(id); }
+  else { auditedSelectedIds = auditedSelectedIds.filter(function(x) { return x !== id; }); }
+  document.getElementById('auditedSelectedCount').textContent = '已选 ' + auditedSelectedIds.length + ' 条';
+}
+function auditedBatchAction(action) {
+  if (!auditedSelectedIds.length) { showToast('请先选择词条', '#ef4444'); return; }
+  var label = action === 'offline' ? '下线' : '删除';
+  if (!confirm('确定要批量' + label + ' ' + auditedSelectedIds.length + ' 条已审核词条吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
+  var done = 0, total = auditedSelectedIds.length;
+  showToast('正在批量' + label + '...', 'var(--primary)');
+  auditedSelectedIds.forEach(function(id) {
+    if (action === 'delete') {
+      apiCall('DELETE', '/api/words/' + id, null, function() { done++; if (done >= total) { auditedSelectedIds = []; loadFromStorage(); renderAudit(); updatePendingBadge(); showToast('批量删除完成', '#22c55e'); } });
+    } else {
+      var w = words.find(function(x) { return x.id === id; });
+      if (w) { w.status = 'offline'; apiCall('PUT', '/api/words/' + id, w, function() { done++; if (done >= total) { auditedSelectedIds = []; renderAudit(); updatePendingBadge(); showToast('批量下线完成', '#22c55e'); } }); }
+      else { done++; }
+    }
+  });
+}
+
+// ===== 已审核词根批量操作 =====
+var rootAuditedSelectedIds = [];
+function toggleRootAuditedSelectAll(checked) {
+  rootAuditedSelectedIds = [];
+  if (checked) { roots.forEach(function(r) { if (r.status === 'approved' || r.status === 'offline' || r.status === 'rejected') rootAuditedSelectedIds.push(r.id); }); }
+  document.getElementById('rootAuditedSelectedCount').textContent = '已选 ' + rootAuditedSelectedIds.length + ' 条';
+  document.querySelectorAll('.root-audited-batch-checkbox').forEach(function(cb) { cb.checked = checked; });
+}
+function toggleRootAuditedItem(id, checked) {
+  if (checked) { if (rootAuditedSelectedIds.indexOf(id) === -1) rootAuditedSelectedIds.push(id); }
+  else { rootAuditedSelectedIds = rootAuditedSelectedIds.filter(function(x) { return x !== id; }); }
+  document.getElementById('rootAuditedSelectedCount').textContent = '已选 ' + rootAuditedSelectedIds.length + ' 条';
+}
+function rootAuditedBatchAction(action) {
+  if (!rootAuditedSelectedIds.length) { showToast('请先选择词根', '#ef4444'); return; }
+  var label = action === 'offline' ? '下线' : '删除';
+  if (!confirm('确定要批量' + label + ' ' + rootAuditedSelectedIds.length + ' 个已审核词根吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
+  var done = 0, total = rootAuditedSelectedIds.length;
+  showToast('正在批量' + label + '...', 'var(--primary)');
+  rootAuditedSelectedIds.forEach(function(id) {
+    if (action === 'delete') {
+      apiCall('DELETE', '/api/roots/' + id, null, function() { done++; if (done >= total) { rootAuditedSelectedIds = []; loadFromStorage(); renderAudit(); renderRoots(); showToast('批量删除完成', '#22c55e'); } });
+    } else {
+      var r = roots.find(function(x) { return x.id === id; });
+      if (r) { r.status = 'offline'; apiCall('PUT', '/api/roots/' + id, r, function() { done++; if (done >= total) { rootAuditedSelectedIds = []; renderAudit(); renderRoots(); showToast('批量下线完成', '#22c55e'); } }); }
       else { done++; }
     }
   });
