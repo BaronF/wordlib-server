@@ -367,7 +367,6 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <div style="font-size:18px;font-weight:700;color:var(--text)">🗑️ 回收站</div>
         <div style="font-size:12px;color:var(--text3);margin-top:4px">已删除的词条和词根，支持恢复或永久删除</div>
       </div>
-      <button class="btn danger" style="padding:7px 18px;font-size:13px" onclick="cleanupRecycleBin()">🧹 清理过期（30天）</button>
       <button class="btn danger" style="padding:7px 18px;font-size:13px;background:#dc2626" onclick="clearAllRecycleBin()">🗑️ 一键清空回收站</button>
     </div>
     <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border)">
@@ -3878,6 +3877,7 @@ function loadUsers() {
         '<div style="display:flex;align-items:center;gap:10px"><span style="font-weight:600;color:var(--text)">' + u.username + '</span>' + roleTag + '</div>' +
         '<div style="display:flex;gap:6px">' +
           '<button class="btn ghost" style="padding:4px 10px;font-size:11px" onclick="resetUserPassword(' + u.id + ',\'' + u.username + '\')">🔑 重置密码</button>' +
+          (u.username !== 'admin' ? '<button class="btn danger" style="padding:4px 10px;font-size:11px" onclick="deleteUser(' + u.id + ',\'' + u.username + '\')">🗑️ 删除</button>' : '') +
         '</div></div>';
     });
     el.innerHTML = html;
@@ -3911,6 +3911,18 @@ function resetUserPassword(uid, username) {
       showToast(username + ' 密码已重置', '#22c55e');
     } else {
       showToast('重置失败：' + (resp && resp.error || '未知错误'), '#ef4444');
+    }
+  });
+}
+
+function deleteUser(uid, username) {
+  if (!confirm('确定要删除用户「' + username + '」吗？删除后该用户将无法登录。')) return;
+  apiCall('DELETE', '/api/users/' + uid, null, function(resp) {
+    if (resp && resp.msg === 'ok') {
+      showToast('用户「' + username + '」已删除', '#22c55e');
+      showUserManager(); // 刷新列表
+    } else {
+      showToast('删除失败：' + (resp && resp.error || '未知错误'), '#ef4444');
     }
   });
 }

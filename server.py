@@ -2049,6 +2049,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self._check_auth():
             return
 
+        # === 删除用户API（仅admin，不可删admin） ===
+        import re as _re_user
+        um = _re_user.match(r'^/api/users/(\d+)$', path)
+        if um:
+            auth_header = self.headers.get('Authorization', '')
+            tk = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
+            cur_user = _verify_token(tk) if tk else None
+            if not cur_user or cur_user.get('role') != 'admin':
+                self._send_json(403, {'error': '仅管理员可删除用户'})
+                return
+            uid = int(um.group(1))
+            conn = get_db()
+            user = conn.execute("SELECT username FROM users WHERE id=?", (uid,)).fetchone()
+            if not user:
+                conn.close()
+                self._send_json(404, {'error': '用户不存在'})
+                return
+            if user['username'] == 'admin':
+                conn.close()
+                self._send_json(400, {'error': '不能删除admin账号'})
+                return
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM users WHERE id=?", (uid,))
+            conn.commit()
+            conn.close()
+            self._log_op('删除用户', f'ID:{uid}, {user["username"]}')
+            self._send_json(200, {'msg': 'ok'})
+            return
+
         # === 回收站永久删除 API ===
         import re as _re_mod
         m = _re_mod.match(r'^/api/recycle_bin/(words|roots)/(\d+)$', path)
