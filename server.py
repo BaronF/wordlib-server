@@ -1895,7 +1895,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          w.get('roots',''), w.get('score',0), w.get('abbr',''),
                          w.get('cnDesc',''), w.get('enDesc',''), w.get('ref',''),
                          w.get('dataType',''), w.get('dataLen',''), w.get('enumValues',''),
-                         w.get('status','approved'), w.get('time',''))
+                         w.get('status','draft'), w.get('time',''))
                     )
                     count += 1
                 except Exception as e:
