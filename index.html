@@ -3920,7 +3920,8 @@ function deleteUser(uid, username) {
   apiCall('DELETE', '/api/users/' + uid, null, function(resp) {
     if (resp && resp.msg === 'ok') {
       showToast('用户「' + username + '」已删除', '#22c55e');
-      showUserManager(); // 刷新列表
+      // 只刷新用户列表，不重新创建弹窗
+      loadUsers();
     } else {
       showToast('删除失败：' + (resp && resp.error || '未知错误'), '#ef4444');
     }
