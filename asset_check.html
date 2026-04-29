@@ -771,9 +771,13 @@ function checkFormat(l4, l5) {
     var len = (a.len||'').trim().toUpperCase();
     var nul = (a.nul||'').trim();
     var tp = (a.tp||'').trim().toUpperCase();
-    // 长度列填了类型关键词（如 VARCHAR 出现在长度列）
-    if (len && typeKeywords.indexOf(len) >= 0) {
-      issues.push({type:'列错位',msg:srcTbl(a)+'字段 <code>'+a.en+'</code> 疑似列错位：长度列填了 <code>'+len+'</code>（应为数字），类型列为 <code>'+tp+'</code>'});
+    // 长度列填了类型关键词 + 类型列为空 = 整行右移一列
+    if (len && typeKeywords.indexOf(len) >= 0 && !tp) {
+      issues.push({type:'列错位',msg:srcTbl(a)+'字段 <code>'+a.en+'</code> 整行数据右移一列：类型列为空，长度列填了 <code>'+a.len.trim()+'</code>'+(nul?'，空否列填了 <code>'+nul+'</code>':'')});
+    }
+    // 长度列填了类型关键词（类型列也有值，说明是值互换）
+    else if (len && typeKeywords.indexOf(len) >= 0) {
+      issues.push({type:'列错位',msg:srcTbl(a)+'字段 <code>'+a.en+'</code> 疑似列错位：长度列填了 <code>'+a.len.trim()+'</code>（应为数字），类型列为 <code>'+tp+'</code>'});
     }
     // 类型列填了纯数字（如 40 出现在类型列）
     if (tp && /^\d+$/.test(tp)) {
@@ -784,19 +788,28 @@ function checkFormat(l4, l5) {
       issues.push({type:'列错位',msg:srcTbl(a)+'字段 <code>'+a.en+'</code> 疑似列错位：空否列填了 <code>'+nul+'</code>（应为Y/N），可能是长度值'});
     }
   });
-  // 16. 类型或长度缺失检测（修正后仍为空的字段）
+  // 16. 类型或长度缺失检测（排除已被列错位检测到的字段）
+  var shiftedFields = {};
+  l5.forEach(function(a){
+    var len = (a.len||'').trim().toUpperCase();
+    var nul = (a.nul||'').trim();
+    var tp = (a.tp||'').trim().toUpperCase();
+    // 标记已检测为错位的字段
+    if ((len && typeKeywords.indexOf(len) >= 0) || (tp && /^\d+$/.test(tp)) || (nul && /^\d+$/.test(nul) && parseInt(nul) > 1)) {
+      shiftedFields[a.en + '||' + (a.tbl_en||'')] = true;
+    }
+  });
   l5.forEach(function(a){
     var tp = (a.tp||'').trim();
     var len = (a.len||'').trim();
     var en = (a.en||'').trim().toLowerCase();
-    if (!en || en === 'id' || en === 'uuid') return; // 跳过主键
-    if (!tp) {
-      issues.push({type:'类型缺失',msg:srcTbl(a)+'字段 <code>'+a.en+'</code>（'+a.cn+'）缺少数据类型'});
-    }
-    if (!len && tp && /VARCHAR|CHAR|NVARCHAR|DECIMAL|NUMERIC/i.test(tp)) {
-      // 已有 "类型缺长度" 规则处理，这里不重复
-    } else if (!len && !tp) {
+    if (!en || en === 'id' || en === 'uuid') return;
+    // 跳过已被列错位检测到的字段
+    if (shiftedFields[a.en + '||' + (a.tbl_en||'')]) return;
+    if (!tp && !len) {
       issues.push({type:'类型缺失',msg:srcTbl(a)+'字段 <code>'+a.en+'</code>（'+a.cn+'）缺少数据类型和长度'});
+    } else if (!tp) {
+      issues.push({type:'类型缺失',msg:srcTbl(a)+'字段 <code>'+a.en+'</code>（'+a.cn+'）缺少数据类型'});
     }
   });
   return issues;
