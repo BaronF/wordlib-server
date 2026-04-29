@@ -1651,6 +1651,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, result)
             return
 
+        # === 批量删除/下线API ===
+        if path == '/api/words/batch_action':
+            ids = data.get('ids', [])
+            action = data.get('action', '')
+            if not ids or action not in ('delete', 'offline'):
+                self._send_json(400, {'error': '参数无效'})
+                return
+            conn = get_db()
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            count = 0
+            for wid in ids:
+                try:
+                    if action == 'delete':
+                        conn.execute("UPDATE words SET deleted=1, deleted_time=? WHERE id=?", (now, wid))
+                    else:
+                        conn.execute("UPDATE words SET status='offline', time=? WHERE id=?", (datetime.datetime.now().strftime('%Y-%m-%d'), wid))
+                    count += 1
+                except: pass
+            conn.commit()
+            conn.close()
+            self._log_op(f'批量{action}词条', f'{count}/{len(ids)}')
+            self._send_json(200, {'success': count, 'total': len(ids)})
+            return
+
+        if path == '/api/roots/batch_action':
+            ids = data.get('ids', [])
+            action = data.get('action', '')
+            if not ids or action not in ('delete', 'offline'):
+                self._send_json(400, {'error': '参数无效'})
+                return
+            conn = get_db()
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            count = 0
+            for rid in ids:
+                try:
+                    if action == 'delete':
+                        conn.execute("UPDATE roots SET deleted=1, deleted_time=? WHERE id=?", (now, rid))
+                    else:
+                        conn.execute("UPDATE roots SET status='offline' WHERE id=?", (rid,))
+                    count += 1
+                except: pass
+            conn.commit()
+            conn.close()
+            self._log_op(f'批量{action}词根', f'{count}/{len(ids)}')
+            self._send_json(200, {'success': count, 'total': len(ids)})
+            return
+
         # === 导出API（必须在 /api/words 之前） ===
         if path == '/api/words/export':
             conn = get_db()

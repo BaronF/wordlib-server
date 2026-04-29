@@ -3584,21 +3584,14 @@ function batchWordAction(action) {
   if (!batchSelectedIds.length) { showToast('请先选择词条', '#ef4444'); return; }
   var label = action === 'offline' ? '下线' : '删除';
   if (!confirm('确定要批量' + label + ' ' + batchSelectedIds.length + ' 条词条吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
-  var done = 0, total = batchSelectedIds.length;
   showToast('正在批量' + label + '...', 'var(--primary)');
-  batchSelectedIds.forEach(function(id) {
-    if (action === 'delete') {
-      apiCall('DELETE', '/api/words/' + id, null, function() {
-        var w = words.find(function(x) { return x.id === id; });
-        if (w) { w.deleted = 1; w.status = 'deleted'; }
-        done++;
-        if (done >= total) { batchSelectedIds = []; updateBatchCount(); loadFromStorage(); renderAudit(); updatePendingBadge(); showToast('批量删除完成', '#22c55e'); }
-      });
-    } else {
-      var w = words.find(function(x) { return x.id === id; });
-      if (w) { w.status = 'offline'; apiCall('PUT', '/api/words/' + id, w, function() { done++; if (done >= total) { batchSelectedIds = []; updateBatchCount(); renderAudit(); updatePendingBadge(); showToast('批量下线完成', '#22c55e'); } }); }
-      else { done++; }
-    }
+  apiCall('POST', '/api/words/batch_action', { ids: batchSelectedIds, action: action }, function(resp) {
+    batchSelectedIds = [];
+    updateBatchCount();
+    loadFromStorage();
+    renderAudit();
+    updatePendingBadge();
+    showToast('批量' + label + '完成，成功 ' + (resp.success || 0) + ' 条', '#22c55e');
   });
 }
 
@@ -3619,21 +3612,13 @@ function rootBatchAction(action) {
   if (!rootBatchSelectedIds.length) { showToast('请先选择词根', '#ef4444'); return; }
   var label = action === 'offline' ? '下线' : '删除';
   if (!confirm('确定要批量' + label + ' ' + rootBatchSelectedIds.length + ' 个词根吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
-  var done = 0, total = rootBatchSelectedIds.length;
   showToast('正在批量' + label + '...', 'var(--primary)');
-  rootBatchSelectedIds.forEach(function(id) {
-    if (action === 'delete') {
-      apiCall('DELETE', '/api/roots/' + id, null, function() {
-        var r = roots.find(function(x) { return x.id === id; });
-        if (r) { r.deleted = 1; r.status = 'deleted'; }
-        done++;
-        if (done >= total) { rootBatchSelectedIds = []; loadFromStorage(); renderAudit(); renderRoots(); showToast('批量删除完成', '#22c55e'); }
-      });
-    } else {
-      var r = roots.find(function(x) { return x.id === id; });
-      if (r) { r.status = 'offline'; apiCall('PUT', '/api/roots/' + id, r, function() { done++; if (done >= total) { rootBatchSelectedIds = []; renderAudit(); renderRoots(); showToast('批量下线完成', '#22c55e'); } }); }
-      else { done++; }
-    }
+  apiCall('POST', '/api/roots/batch_action', { ids: rootBatchSelectedIds, action: action }, function(resp) {
+    rootBatchSelectedIds = [];
+    loadFromStorage();
+    renderAudit();
+    renderRoots();
+    showToast('批量' + label + '完成，成功 ' + (resp.success || 0) + ' 个', '#22c55e');
   });
 }
 
@@ -3654,16 +3639,13 @@ function auditedBatchAction(action) {
   if (!auditedSelectedIds.length) { showToast('请先选择词条', '#ef4444'); return; }
   var label = action === 'offline' ? '下线' : '删除';
   if (!confirm('确定要批量' + label + ' ' + auditedSelectedIds.length + ' 条已审核词条吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
-  var done = 0, total = auditedSelectedIds.length;
   showToast('正在批量' + label + '...', 'var(--primary)');
-  auditedSelectedIds.forEach(function(id) {
-    if (action === 'delete') {
-      apiCall('DELETE', '/api/words/' + id, null, function() { done++; if (done >= total) { auditedSelectedIds = []; loadFromStorage(); renderAudit(); updatePendingBadge(); showToast('批量删除完成', '#22c55e'); } });
-    } else {
-      var w = words.find(function(x) { return x.id === id; });
-      if (w) { w.status = 'offline'; apiCall('PUT', '/api/words/' + id, w, function() { done++; if (done >= total) { auditedSelectedIds = []; renderAudit(); updatePendingBadge(); showToast('批量下线完成', '#22c55e'); } }); }
-      else { done++; }
-    }
+  apiCall('POST', '/api/words/batch_action', { ids: auditedSelectedIds, action: action }, function(resp) {
+    auditedSelectedIds = [];
+    loadFromStorage();
+    renderAudit();
+    updatePendingBadge();
+    showToast('批量' + label + '完成，成功 ' + (resp.success || 0) + ' 条', '#22c55e');
   });
 }
 
@@ -3684,16 +3666,13 @@ function rootAuditedBatchAction(action) {
   if (!rootAuditedSelectedIds.length) { showToast('请先选择词根', '#ef4444'); return; }
   var label = action === 'offline' ? '下线' : '删除';
   if (!confirm('确定要批量' + label + ' ' + rootAuditedSelectedIds.length + ' 个已审核词根吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
-  var done = 0, total = rootAuditedSelectedIds.length;
   showToast('正在批量' + label + '...', 'var(--primary)');
-  rootAuditedSelectedIds.forEach(function(id) {
-    if (action === 'delete') {
-      apiCall('DELETE', '/api/roots/' + id, null, function() { done++; if (done >= total) { rootAuditedSelectedIds = []; loadFromStorage(); renderAudit(); renderRoots(); showToast('批量删除完成', '#22c55e'); } });
-    } else {
-      var r = roots.find(function(x) { return x.id === id; });
-      if (r) { r.status = 'offline'; apiCall('PUT', '/api/roots/' + id, r, function() { done++; if (done >= total) { rootAuditedSelectedIds = []; renderAudit(); renderRoots(); showToast('批量下线完成', '#22c55e'); } }); }
-      else { done++; }
-    }
+  apiCall('POST', '/api/roots/batch_action', { ids: rootAuditedSelectedIds, action: action }, function(resp) {
+    rootAuditedSelectedIds = [];
+    loadFromStorage();
+    renderAudit();
+    renderRoots();
+    showToast('批量' + label + '完成，成功 ' + (resp.success || 0) + ' 个', '#22c55e');
   });
 }
 
