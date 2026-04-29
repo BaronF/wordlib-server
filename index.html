@@ -367,7 +367,8 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <div style="font-size:18px;font-weight:700;color:var(--text)">🗑️ 回收站</div>
         <div style="font-size:12px;color:var(--text3);margin-top:4px">已删除的词条和词根，支持恢复或永久删除</div>
       </div>
-      <button class="btn danger" style="padding:7px 18px;font-size:13px" onclick="cleanupRecycleBin()">🧹 清理过期记录（30天）</button>
+      <button class="btn danger" style="padding:7px 18px;font-size:13px" onclick="cleanupRecycleBin()">🧹 清理过期（30天）</button>
+      <button class="btn danger" style="padding:7px 18px;font-size:13px;background:#dc2626" onclick="clearAllRecycleBin()">🗑️ 一键清空回收站</button>
     </div>
     <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border)">
       <div class="recycle-tab on" data-rt="words" onclick="switchRecycleTab('words')" style="padding:10px 24px;font-size:14px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .2s">📚 已删除词条</div>
@@ -3215,6 +3216,14 @@ function cleanupRecycleBin() {
   });
 }
 
+function clearAllRecycleBin() {
+  if (!confirm('⚠️ 确定要永久清空回收站中所有词条和词根吗？\n此操作不可恢复！')) return;
+  apiCall('POST', '/api/recycle_bin/clear_all', { type: 'all' }, function(resp) {
+    showToast('回收站已清空，共删除 ' + (resp.count || 0) + ' 条记录', '#22c55e');
+    loadRecycleBin();
+  });
+}
+
 // ========== 版本历史模块 ==========
 function showWordVersions(wordId) {
   var overlay = document.createElement('div');
@@ -3632,11 +3641,14 @@ function rootBatchAction(action) {
 
 // ===== 已审核词条批量操作 =====
 var auditedSelectedIds = [];
+var auditedSelectAllFlag = false;
 function toggleAuditedSelectAll(checked) {
+  auditedSelectAllFlag = checked;
   auditedSelectedIds = [];
   if (checked) { words.forEach(function(w) { if (w.status === 'approved' || w.status === 'offline' || w.status === 'rejected') auditedSelectedIds.push(w.id); }); }
   document.getElementById('auditedSelectedCount').textContent = '已选 ' + auditedSelectedIds.length + ' 条';
-  document.querySelectorAll('.audited-batch-checkbox').forEach(function(cb) { cb.checked = checked; });
+  // 不逐个操作 DOM，重新渲染审核列表
+  renderAudit();
 }
 function toggleAuditedItem(id, checked) {
   if (checked) { if (auditedSelectedIds.indexOf(id) === -1) auditedSelectedIds.push(id); }
@@ -3647,11 +3659,26 @@ function auditedBatchAction(action) {
   if (!auditedSelectedIds.length) { showToast('请先选择词条', '#ef4444'); return; }
   var label = action === 'offline' ? '下线' : '删除';
   if (!confirm('确定要批量' + label + ' ' + auditedSelectedIds.length + ' 条已审核词条吗？' + (action === 'delete' ? '（将移入回收站）' : ''))) return;
-  showToast('正在批量' + label + '...', 'var(--primary)');
+  showToast('正在批量' + label + ' ' + auditedSelectedIds.length + ' 条...', 'var(--primary)');
   apiCall('POST', '/api/words/batch_action', { ids: auditedSelectedIds, action: action }, function(resp) {
     auditedSelectedIds = [];
-    loadFromStorage();
+    auditedSelectAllFlag = false;
+    // 异步重新加载
+    try {
+      var data = apiCallSync('GET', '/api/words?size=9999');
+      if (data && data.data) {
+        words = data.data.map(function(w) {
+          if (!w.dataType && w.datatype) w.dataType = w.datatype;
+          if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
+          if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
+          if (!w.cnDesc && w.cndesc) w.cnDesc = w.cndesc;
+          if (!w.enDesc && w.endesc) w.enDesc = w.endesc;
+          return w;
+        });
+      }
+    } catch(e) {}
     renderAudit();
+    doSearch();
     updatePendingBadge();
     showToast('批量' + label + '完成，成功 ' + (resp.success || 0) + ' 条', '#22c55e');
   });

@@ -1656,6 +1656,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {'msg': 'ok'})
             return
 
+        # === 回收站一键清空API ===
+        if path == '/api/recycle_bin/clear_all':
+            rtype = data.get('type', '')
+            conn = get_db()
+            count = 0
+            if rtype == 'words' or rtype == 'all':
+                c = conn.execute("SELECT COUNT(*) FROM words WHERE deleted=1").fetchone()[0]
+                conn.execute("DELETE FROM words WHERE deleted=1")
+                count += c
+            if rtype == 'roots' or rtype == 'all':
+                c = conn.execute("SELECT COUNT(*) FROM roots WHERE deleted=1").fetchone()[0]
+                conn.execute("DELETE FROM roots WHERE deleted=1")
+                count += c
+            conn.commit()
+            conn.close()
+            self._log_op('一键清空回收站', f'类型:{rtype}, 清除{count}条')
+            self._send_json(200, {'msg': 'ok', 'count': count})
+            return
+
         # === 批量审核API（必须在 /api/words 之前） ===
         if path == '/api/words/batch_approve':
             word_ids = data.get('ids', [])
