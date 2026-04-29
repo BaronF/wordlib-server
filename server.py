@@ -990,6 +990,7 @@ def _extract_fields_from_docx(filepath):
                 tp_ci = ci
             elif ('长度' in val or 'length' in val.lower() or '精度' in val) and len_ci is None:
                 len_ci = ci
+        write_log(f'[DOCX剥离] 表头: {hdr[:10]}, en={en_ci}, cn={cn_ci}, tp={tp_ci}, len={len_ci}')
         # 如果没找到表头，尝试自动检测
         if en_ci is None:
             for ci, val in enumerate(hdr):
@@ -1007,6 +1008,13 @@ def _extract_fields_from_docx(filepath):
             if en and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', en):
                 field_pairs.add((en, cn, tp, ln))
 
+    # 日志：统计有类型信息的字段数
+    with_tp = sum(1 for x in field_pairs if len(x) >= 3 and x[2])
+    write_log(f'[DOCX剥离] 共提取 {len(field_pairs)} 个字段对, 其中 {with_tp} 个有类型信息')
+    if field_pairs:
+        sample = list(field_pairs)[:3]
+        for s in sample:
+            write_log(f'[DOCX剥离] 样本: {s}')
     return field_pairs
 
 def _import_extracted_roots(roots_list, mode='skip'):
