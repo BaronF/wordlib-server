@@ -1,1 +1,2 @@
 xlsxwriter
+psycopg2-binary

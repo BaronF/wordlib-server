@@ -2,7 +2,6 @@
 """词库词根管理系统 - Python后端服务（逐条存储+分页）"""
 import http.server
 import json
-import sqlite3
 import os
 import sys
 import urllib.parse
@@ -12,10 +11,120 @@ import secrets
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get('PORT', 8080))
-# 数据库文件：优先存到 /data（Railway Volume），否则存到脚本目录
-DATA_DIR = '/data' if os.path.isdir('/data') else SCRIPT_DIR
-DB_FILE = os.path.join(DATA_DIR, 'wordlib.db')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 LOG_FILE = os.path.join(SCRIPT_DIR, 'server.log')
+
+# 数据库适配层：支持 SQLite 和 PostgreSQL
+USE_PG = DATABASE_URL.startswith('postgresql')
+
+if USE_PG:
+    import psycopg2
+    import psycopg2.extras
+else:
+    import sqlite3
+    DATA_DIR = '/data' if os.path.isdir('/data') else SCRIPT_DIR
+    DB_FILE = os.path.join(DATA_DIR, 'wordlib.db')
+
+def _pg_connect():
+    """创建 PostgreSQL 连接"""
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
+    return conn
+
+class PgCursorWrapper:
+    """PostgreSQL 游标包装器，将 ? 占位符转为 %s，并模拟 sqlite3.Row 行为"""
+    def __init__(self, conn):
+        self._conn = conn
+        self._cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        self._lastrowid = None
+
+    def execute(self, sql, params=None):
+        sql = sql.replace('?', '%s')
+        # SQLite 函数适配
+        sql = sql.replace("datetime('now','localtime')", "NOW()")
+        sql = sql.replace("date('now','localtime')", "CURRENT_DATE")
+        sql = sql.replace("date('now','start of month')", "DATE_TRUNC('month', CURRENT_DATE)::date")
+        # PostgreSQL 大小写敏感列名处理
+        import re as _re
+        # 在非建表语句中，给 cnDesc/enDesc 加引号
+        if 'CREATE TABLE' not in sql.upper():
+            sql = _re.sub(r'\bcnDesc\b', '"cnDesc"', sql)
+            sql = _re.sub(r'\benDesc\b', '"enDesc"', sql)
+        self._cursor.execute(sql, params or ())
+        # 获取 lastrowid（INSERT 时）
+        if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
+            try:
+                # 尝试获取序列值
+                self._cursor.execute("SELECT lastval()")
+                row = self._cursor.fetchone()
+                self._lastrowid = row['lastval'] if row else None
+            except:
+                self._lastrowid = None
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        return PgRow(row)
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        return [PgRow(r) for r in rows]
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+    def close(self):
+        self._cursor.close()
+
+class PgRow:
+    """模拟 sqlite3.Row，支持 row['col'] 和 row[0] 访问"""
+    def __init__(self, data):
+        self._data = data
+        self._keys = list(data.keys())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self._data.values())[key]
+        return self._data.get(key)
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def keys(self):
+        return self._keys
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+class PgConnWrapper:
+    """PostgreSQL 连接包装器，模拟 sqlite3 连接接口"""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, params=None):
+        cur = PgCursorWrapper(self._conn)
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    @property
+    def row_factory(self):
+        return None
+
+    @row_factory.setter
+    def row_factory(self, val):
+        pass
 
 def write_log(msg):
     """写入日志文件并输出到控制台"""
@@ -69,140 +178,241 @@ def _verify_token(token):
         conn.close()
         return None
     # 更新最后活动时间
-    conn.execute("UPDATE sessions SET last_active=datetime('now','localtime') WHERE token=?", (token,))
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn.execute("UPDATE sessions SET last_active=? WHERE token=?", (now, token))
     conn.commit()
     result = {'user_id': row['user_id'], 'username': row['username'], 'role': row['role']}
     conn.close()
     return result
 
 def get_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    # 词条表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS words (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cn TEXT NOT NULL DEFAULT '',
-            en TEXT NOT NULL DEFAULT '',
-            cat TEXT DEFAULT '',
-            roots TEXT DEFAULT '',
-            score REAL DEFAULT 0,
-            abbr TEXT DEFAULT '',
-            cnDesc TEXT DEFAULT '',
-            enDesc TEXT DEFAULT '',
-            ref TEXT DEFAULT '',
-            status TEXT DEFAULT 'draft',
-            time TEXT DEFAULT (date('now','localtime'))
-        )
-    """)
-    # 词根表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS roots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL DEFAULT '',
-            en TEXT DEFAULT '',
-            mean TEXT DEFAULT '',
-            src TEXT DEFAULT '',
-            cat TEXT DEFAULT '',
-            status TEXT DEFAULT 'draft',
-            examples TEXT DEFAULT '[]'
-        )
-    """)
-    # 资产解析历史表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS asset_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            l4_count INTEGER DEFAULT 0,
-            l5_count INTEGER DEFAULT 0,
-            issue_count INTEGER DEFAULT 0,
-            change_count INTEGER DEFAULT 0,
-            result_json TEXT DEFAULT '',
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 自动迁移：确保 result_json 字段存在
-    try:
-        conn.execute("SELECT result_json FROM asset_history LIMIT 1")
-    except:
+    if USE_PG:
+        raw_conn = _pg_connect()
+        conn = PgConnWrapper(raw_conn)
+        # PostgreSQL 建表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS words (
+                id SERIAL PRIMARY KEY,
+                cn TEXT NOT NULL DEFAULT '',
+                en TEXT NOT NULL DEFAULT '',
+                cat TEXT DEFAULT '',
+                roots TEXT DEFAULT '',
+                score REAL DEFAULT 0,
+                abbr TEXT DEFAULT '',
+                "cnDesc" TEXT DEFAULT '',
+                "enDesc" TEXT DEFAULT '',
+                ref TEXT DEFAULT '',
+                status TEXT DEFAULT 'draft',
+                time TEXT DEFAULT CURRENT_DATE,
+                deleted INTEGER DEFAULT 0,
+                deleted_time TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roots (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                en TEXT DEFAULT '',
+                mean TEXT DEFAULT '',
+                src TEXT DEFAULT '',
+                cat TEXT DEFAULT '',
+                status TEXT DEFAULT 'draft',
+                examples TEXT DEFAULT '[]',
+                deleted INTEGER DEFAULT 0,
+                deleted_time TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS asset_history (
+                id SERIAL PRIMARY KEY,
+                filename TEXT NOT NULL,
+                l4_count INTEGER DEFAULT 0,
+                l5_count INTEGER DEFAULT 0,
+                issue_count INTEGER DEFAULT 0,
+                change_count INTEGER DEFAULT 0,
+                result_json TEXT DEFAULT '',
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS word_versions (
+                id SERIAL PRIMARY KEY,
+                word_id INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                snapshot TEXT NOT NULL,
+                op_type TEXT NOT NULL,
+                operator TEXT DEFAULT 'system',
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS import_logs (
+                id SERIAL PRIMARY KEY,
+                batch_id TEXT NOT NULL,
+                row_num INTEGER,
+                reason TEXT,
+                raw_data TEXT,
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT DEFAULT 'user',
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                last_active TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS synonyms (
+                id SERIAL PRIMARY KEY,
+                word TEXT NOT NULL,
+                standard TEXT NOT NULL,
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extract_history (
+                id SERIAL PRIMARY KEY,
+                filename TEXT NOT NULL,
+                root_count INTEGER DEFAULT 0,
+                field_count INTEGER DEFAULT 0,
+                result_json TEXT DEFAULT '',
+                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            )
+        """)
+        _init_admin_account(conn)
+        conn.commit()
+        return conn
+    else:
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        # 词条表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS words (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cn TEXT NOT NULL DEFAULT '',
+                en TEXT NOT NULL DEFAULT '',
+                cat TEXT DEFAULT '',
+                roots TEXT DEFAULT '',
+                score REAL DEFAULT 0,
+                abbr TEXT DEFAULT '',
+                cnDesc TEXT DEFAULT '',
+                enDesc TEXT DEFAULT '',
+                ref TEXT DEFAULT '',
+                status TEXT DEFAULT 'draft',
+                time TEXT DEFAULT (date('now','localtime'))
+            )
+        """)
+        # 词根表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '',
+                en TEXT DEFAULT '',
+                mean TEXT DEFAULT '',
+                src TEXT DEFAULT '',
+                cat TEXT DEFAULT '',
+                status TEXT DEFAULT 'draft',
+                examples TEXT DEFAULT '[]'
+            )
+        """)
+        # 资产解析历史表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS asset_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                l4_count INTEGER DEFAULT 0,
+                l5_count INTEGER DEFAULT 0,
+                issue_count INTEGER DEFAULT 0,
+                change_count INTEGER DEFAULT 0,
+                result_json TEXT DEFAULT '',
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
         try:
-            conn.execute("ALTER TABLE asset_history ADD COLUMN result_json TEXT DEFAULT ''")
-        except: pass
-    # 版本历史表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS word_versions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            word_id INTEGER NOT NULL,
-            version INTEGER NOT NULL,
-            snapshot TEXT NOT NULL,
-            op_type TEXT NOT NULL,
-            operator TEXT DEFAULT 'system',
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 导入错误日志表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS import_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id TEXT NOT NULL,
-            row_num INTEGER,
-            reason TEXT,
-            raw_data TEXT,
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 用户账号表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT DEFAULT 'user',
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 会话管理表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token TEXT UNIQUE NOT NULL,
-            last_active TEXT DEFAULT (datetime('now','localtime')),
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 同义词映射表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS synonyms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            word TEXT NOT NULL,
-            standard TEXT NOT NULL,
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 词根剥离历史表
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS extract_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            root_count INTEGER DEFAULT 0,
-            field_count INTEGER DEFAULT 0,
-            result_json TEXT DEFAULT '',
-            time TEXT DEFAULT (datetime('now','localtime'))
-        )
-    """)
-    # 自动迁移：为 words 和 roots 表新增 deleted、deleted_time 字段
-    for table in ('words', 'roots'):
-        try:
-            conn.execute(f"SELECT deleted FROM {table} LIMIT 1")
+            conn.execute("SELECT result_json FROM asset_history LIMIT 1")
         except:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER DEFAULT 0")
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted_time TEXT")
-    # 初始化 admin 账号
-    _init_admin_account(conn)
-    conn.commit()
-    return conn
+            try:
+                conn.execute("ALTER TABLE asset_history ADD COLUMN result_json TEXT DEFAULT ''")
+            except: pass
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS word_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word_id INTEGER NOT NULL,
+                version INTEGER NOT NULL,
+                snapshot TEXT NOT NULL,
+                op_type TEXT NOT NULL,
+                operator TEXT DEFAULT 'system',
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS import_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                row_num INTEGER,
+                reason TEXT,
+                raw_data TEXT,
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT DEFAULT 'user',
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                last_active TEXT DEFAULT (datetime('now','localtime')),
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS synonyms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT NOT NULL,
+                standard TEXT NOT NULL,
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS extract_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                root_count INTEGER DEFAULT 0,
+                field_count INTEGER DEFAULT 0,
+                result_json TEXT DEFAULT '',
+                time TEXT DEFAULT (datetime('now','localtime'))
+            )
+        """)
+        for table in ('words', 'roots'):
+            try:
+                conn.execute(f"SELECT deleted FROM {table} LIMIT 1")
+            except:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted INTEGER DEFAULT 0")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN deleted_time TEXT")
+        _init_admin_account(conn)
+        conn.commit()
+        return conn
 
 def parse_query(qs):
     """解析查询参数"""
@@ -215,14 +425,21 @@ def parse_query(qs):
     return params
 
 def row_to_dict(row):
-    """sqlite3.Row转字典"""
-    return dict(row) if row else None
+    """sqlite3.Row 或 PgRow 转字典"""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, '_data'):
+        return dict(row._data)
+    return dict(row)
 
 def _soft_delete(conn, table, record_id):
     """软删除：标记 deleted=1 并记录删除时间"""
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute(
-        f"UPDATE {table} SET deleted=1, deleted_time=datetime('now','localtime') WHERE id=?",
-        (record_id,)
+        f"UPDATE {table} SET deleted=1, deleted_time=? WHERE id=?",
+        (now, record_id)
     )
 
 def _restore_record(conn, table, record_id):
@@ -239,10 +456,11 @@ def _create_word_version(conn, word_id, old_data, op_type, operator='system'):
     max_ver = conn.execute(
         "SELECT MAX(version) FROM word_versions WHERE word_id=?", (word_id,)
     ).fetchone()[0] or 0
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute(
         """INSERT INTO word_versions(word_id, version, snapshot, op_type, operator, time)
-           VALUES(?,?,?,?,?,datetime('now','localtime'))""",
-        (word_id, max_ver + 1, json.dumps(old_data, ensure_ascii=False), op_type, operator)
+           VALUES(?,?,?,?,?,?)""",
+        (word_id, max_ver + 1, json.dumps(old_data, ensure_ascii=False), op_type, operator, now)
     )
 
 def _diff_versions(old_snapshot, new_snapshot):
@@ -783,7 +1001,7 @@ def _batch_approve_words(word_ids, target_status, operator='system'):
                 continue
             old_data = dict(old_row)
             _create_word_version(conn, wid, old_data, '审核变更', operator)
-            conn.execute("UPDATE words SET status=?, time=date('now','localtime') WHERE id=?", (target_status, wid))
+            conn.execute("UPDATE words SET status=?, time=? WHERE id=?", (target_status, datetime.datetime.now().strftime('%Y-%m-%d'), wid))
             success += 1
         except Exception as e:
             failed.append({'id': wid, 'reason': str(e)})
@@ -891,7 +1109,9 @@ def _get_report_overview():
     conn = get_db()
     word_total = conn.execute("SELECT COUNT(*) FROM words WHERE deleted=0").fetchone()[0]
     root_total = conn.execute("SELECT COUNT(*) FROM roots WHERE deleted=0").fetchone()[0]
-    word_month = conn.execute("SELECT COUNT(*) FROM words WHERE deleted=0 AND time >= date('now','start of month')").fetchone()[0]
+    # 本月新增：用 Python 计算月份字符串
+    month_start = datetime.datetime.now().strftime('%Y-%m-01')
+    word_month = conn.execute("SELECT COUNT(*) FROM words WHERE deleted=0 AND time >= ?", (month_start,)).fetchone()[0]
     root_month = conn.execute("SELECT COUNT(*) FROM roots WHERE deleted=0").fetchone()[0]
     conn.close()
     return {'word_total': word_total, 'root_total': root_total, 'word_month': word_month, 'root_month': root_month}
@@ -899,11 +1119,13 @@ def _get_report_overview():
 def _get_trend(months=12):
     conn = get_db()
     results = []
-    fmt = '%Y-%m'
+    now = datetime.datetime.now()
     for i in range(months - 1, -1, -1):
-        month_str = conn.execute("SELECT strftime(?, date('now','start of month','-' || ? || ' months'))", (fmt, i)).fetchone()[0]
+        # 用 Python 计算月份
+        d = now - datetime.timedelta(days=i * 30)
+        month_str = d.strftime('%Y-%m')
         count = conn.execute(
-            "SELECT COUNT(*) FROM words WHERE deleted=0 AND strftime(?, time) = ?", (fmt, month_str)
+            "SELECT COUNT(*) FROM words WHERE deleted=0 AND time LIKE ?", (month_str + '%',)
         ).fetchone()[0]
         results.append({'month': month_str, 'count': count})
     conn.close()
@@ -1371,7 +1593,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/api/recycle_bin/cleanup':
             conn = get_db()
             for table in ('words', 'roots'):
-                conn.execute(f"DELETE FROM {table} WHERE deleted=1 AND deleted_time < datetime('now','localtime','-30 days')")
+                cutoff = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+                conn.execute(f"DELETE FROM {table} WHERE deleted=1 AND deleted_time < ?", (cutoff,))
             conn.commit()
             conn.close()
             self._log_op('清理过期回收站记录')
@@ -1697,7 +1920,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = get_db()
             # 先查出词条信息用于日志
             row = conn.execute("SELECT cn,en FROM words WHERE id=?", (wid,)).fetchone()
-            conn.execute("UPDATE words SET deleted=1, deleted_time=datetime('now','localtime') WHERE id=?", (wid,))
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            conn.execute("UPDATE words SET deleted=1, deleted_time=? WHERE id=?", (now, wid))
             conn.commit()
             conn.close()
             if row:
@@ -1712,7 +1936,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = get_db()
             # 先查出词根信息用于日志
             row = conn.execute("SELECT name,en FROM roots WHERE id=?", (rid,)).fetchone()
-            conn.execute("UPDATE roots SET deleted=1, deleted_time=datetime('now','localtime') WHERE id=?", (rid,))
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            conn.execute("UPDATE roots SET deleted=1, deleted_time=? WHERE id=?", (now, rid))
             conn.commit()
             conn.close()
             if row:
@@ -2362,7 +2587,10 @@ if __name__ == '__main__':
     print('  含数据资产整改功能')
     print('=' * 40)
     print(f'脚本目录: {SCRIPT_DIR}')
-    print(f'数据库: {DB_FILE}')
+    if USE_PG:
+        print(f'数据库: PostgreSQL (Railway)')
+    else:
+        print(f'数据库: SQLite ({DB_FILE})')
     print(f'日志文件: {LOG_FILE}')
     get_db()
     print(f'数据库已就绪')
