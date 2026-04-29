@@ -367,6 +367,8 @@ function extractFromElementsSync(elements, fname) {
     if (el.t==='T' && (inDef || curTblEn)) {
       var rows=el.v; if(rows.length<2) continue;
       var hdr=rows[0].join(' ');
+      // 跳过数据字典表（表头含"代码"/"编码"/"取值范围"等特征）
+      if (hdr.indexOf('代码')>=0 || hdr.indexOf('编码')>=0 || hdr.indexOf('取值范围')>=0 || hdr.indexOf('数据字典')>=0) continue;
       if (hdr.indexOf('字段')>=0 || hdr.indexOf('英文')>=0) {
         var hdrs=rows[0], enCol=-1, cnCol=-1, tpCol=-1, lenCol=-1, pkCol=-1, nulCol=-1;
         for(var ci=0;ci<hdrs.length;ci++){
@@ -497,10 +499,9 @@ function parseXlsx(buf, fname) {
 function finishParse(l4, l5, fname, dictFields) {
   state.l4=l4; state.l5=l5;
   state.fname=fname.replace(/\.(docx|xlsx)$/i,'');
-  // 命名分析（L5 字段 + 数据字典字段一起参与）
+  // 命名分析（仅 L5 字段参与，数据字典编码值不参与一义多词/一词多义检测）
   var en2cn={}, cn2en={};
   var allFields = l5.slice();
-  if (dictFields && dictFields.length) allFields = allFields.concat(dictFields);
   allFields.forEach(function(a){
     if(!a.en||!a.cn) return;
     if(!en2cn[a.en]) en2cn[a.en]={};
