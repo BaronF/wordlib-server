@@ -501,6 +501,34 @@ function parseXlsx(buf, fname) {
 function finishParse(l4, l5, fname, dictFields) {
   state.l4=l4; state.l5=l5;
   state.fname=fname.replace(/\.(docx|xlsx)$/i,'');
+
+  // 自动修正列错位：类型列填了数字→和长度列交换；长度列填了类型关键词→和类型列交换
+  var typeKW = ['VARCHAR','CHAR','INT','INTEGER','BIGINT','SMALLINT','TINYINT','DECIMAL','NUMERIC','FLOAT','DOUBLE','REAL','TEXT','BLOB','DATE','DATETIME','TIMESTAMP','BOOLEAN','BIT','CLOB','NVARCHAR','NCHAR'];
+  l5.forEach(function(a) {
+    var tp = (a.tp||'').trim(), len = (a.len||'').trim(), nul = (a.nul||'').trim();
+    // 情况1：类型列是纯数字，长度列是类型关键词 → 交换
+    if (/^\d+$/.test(tp) && typeKW.indexOf(len.toUpperCase()) >= 0) {
+      a.tp = len; a.len = tp;
+    }
+    // 情况2：长度列是类型关键词，类型列为空或也不对 → 长度值可能在空否列
+    else if (typeKW.indexOf(len.toUpperCase()) >= 0) {
+      if (nul && /^\d+$/.test(nul)) {
+        a.tp = len; a.len = nul; a.nul = '';
+      } else {
+        a.tp = len; a.len = '';
+      }
+    }
+    // 情况3：类型列是纯数字，长度列为空 → 类型可能在空否列或其他位置
+    else if (/^\d+$/.test(tp) && !len) {
+      if (nul && typeKW.indexOf(nul.toUpperCase()) >= 0) {
+        a.len = tp; a.tp = nul; a.nul = '';
+      }
+    }
+    // 情况4：空否列填了大数字（>1），可能是长度错位
+    if ((a.nul||'').trim() && /^\d+$/.test((a.nul||'').trim()) && parseInt((a.nul||'').trim()) > 1) {
+      if (!a.len || a.len.trim() === '') { a.len = a.nul.trim(); a.nul = ''; }
+    }
+  });
   // 命名分析（仅 L5 字段参与，数据字典编码值不参与一义多词/一词多义检测）
   var en2cn={}, cn2en={};
   var allFields = l5.slice();
