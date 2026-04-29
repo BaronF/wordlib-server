@@ -1885,11 +1885,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             items = data if isinstance(data, list) else data.get('words', [])
             conn = get_db()
             count = 0
-            errors = []
-            for i, w in enumerate(items):
-                try:
-                    if USE_PG:
-                        conn.execute("SAVEPOINT sp_import")
+            try:
+                for w in items:
                     conn.execute(
                         """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1900,31 +1897,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          w.get('status','draft'), w.get('time',''))
                     )
                     count += 1
-                except Exception as e:
-                    if USE_PG:
-                        try: conn.execute("ROLLBACK TO SAVEPOINT sp_import")
-                        except: pass
-                    errors.append(str(e)[:100])
-                if (i + 1) % 200 == 0:
-                    try: conn.commit()
-                    except: pass
-            try: conn.commit()
-            except: pass
+                conn.commit()
+            except Exception as e:
+                write_log(f'批量导入词条失败(第{count+1}条): {e}')
+                try: conn.rollback()
+                except: pass
+                conn.close()
+                self._send_json(500, {"error": f"导入失败(第{count+1}条): {str(e)[:200]}", "count": count})
+                return
             conn.close()
-            self._log_op('批量初始化词条', f'成功{count}/{len(items)}条' + (f', 失败{len(errors)}条' if errors else ''))
-            if errors:
-                write_log(f'导入词条错误样本: {errors[:3]}')
-            self._send_json(200, {"msg": "ok", "count": count, "errors": len(errors)})
+            self._log_op('批量初始化词条', f'共{count}条')
+            self._send_json(200, {"msg": "ok", "count": count})
             return
 
         if path == '/api/init_roots':
             items = data if isinstance(data, list) else data.get('roots', [])
             conn = get_db()
             count = 0
-            for i, r in enumerate(items):
-                try:
-                    if USE_PG:
-                        conn.execute("SAVEPOINT sp_import_r")
+            try:
+                for r in items:
                     examples = r.get('examples', [])
                     if isinstance(examples, list):
                         examples = json.dumps(examples, ensure_ascii=False)
@@ -1936,18 +1927,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          r.get('status','approved'), examples)
                     )
                     count += 1
-                except Exception as e:
-                    if USE_PG:
-                        try: conn.execute("ROLLBACK TO SAVEPOINT sp_import_r")
-                        except: pass
-                    write_log(f'导入词根失败: {e}, name={r.get("name","")}, en={r.get("en","")}')
-                if (i + 1) % 200 == 0:
-                    try: conn.commit()
-                    except: pass
-            try: conn.commit()
-            except: pass
+                conn.commit()
+            except Exception as e:
+                write_log(f'批量导入词根失败(第{count+1}条): {e}')
+                try: conn.rollback()
+                except: pass
+                conn.close()
+                self._send_json(500, {"error": f"导入失败(第{count+1}条): {str(e)[:200]}", "count": count})
+                return
             conn.close()
-            self._log_op('批量初始化词根', f'共{count}/{len(items)}条')
+            self._log_op('批量初始化词根', f'共{count}条')
             self._send_json(200, {"msg": "ok", "count": count})
             return
 
