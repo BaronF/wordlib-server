@@ -1883,6 +1883,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # 批量初始化导入
         if path == '/api/init_words':
             items = data if isinstance(data, list) else data.get('words', [])
+            write_log(f'init_words 收到 {len(items)} 条数据, data类型={type(data).__name__}, 是否list={isinstance(data, list)}')
+            if items and len(items) > 0:
+                write_log(f'init_words 第1条样本: {json.dumps(items[0], ensure_ascii=False)[:200]}')
             conn = get_db()
             count = 0
             try:
