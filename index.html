@@ -130,6 +130,7 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
       <span class="hot-tag" data-cat="设备类" onclick="filterByCat('设备类')">设备类</span>
       <span class="hot-tag" data-cat="人员类" onclick="filterByCat('人员类')">人员类</span>
       <span class="hot-tag" data-cat="财务类" onclick="filterByCat('财务类')">财务类</span>
+      <span class="hot-tag" style="background:rgba(232,115,12,.1);border-color:var(--primary);color:var(--primary)" onclick="switchTab('roots');filterHotRoots()">🔥 热门词根</span>
     </div>
   </div>
 </div>
@@ -936,12 +937,39 @@ function updateStatText(tab) {
 function filterByCat(cat) {
   document.getElementById('searchType').value = cat;
   document.getElementById('searchInput').value = '';
-  // 高亮热门标签
   document.querySelectorAll('.hot-tag').forEach(function(el) {
     el.classList.toggle('on', el.getAttribute('data-cat') === cat);
   });
   doSearch();
 }
+
+// ===== 热门词根筛选（关联词条>=5的词根） =====
+function filterHotRoots() {
+  document.getElementById('rootSearch').value = '';
+  document.getElementById('rootCatFilter').value = '';
+  // 渲染时只显示热门词根
+  var grid = document.getElementById('rootGrid');
+  var empty = document.getElementById('rootEmpty');
+  var stat = document.getElementById('rootsStat');
+  var hotList = roots.filter(function(r) {
+    if (r.deleted || r.status !== 'approved') return false;
+    var relCount = words.filter(function(w) {
+      if (w.status !== 'approved') return false;
+      var parts = (w.en || '').toLowerCase().split('_');
+      return parts.indexOf(r.en.toLowerCase()) >= 0;
+    }).length;
+    return relCount >= 5;
+  });
+  stat.textContent = '🔥 热门词根（关联≥5个词条）共 ' + hotList.length + ' 个';
+  if (!hotList.length) { grid.innerHTML = ''; empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  // 触发正常渲染但只显示热门
+  window._hotRootFilter = true;
+  renderRoots();
+}
+
+// 在 renderRoots 中支持热门筛选
+var _origRenderRoots = null;
 
 // ===== 完全重复检查 =====
 function checkExactDuplicate(cn, en, excludeId) {
@@ -2693,6 +2721,7 @@ function renderRoots() {
   var list = roots.filter(function(r) {
     // 非管理员只看已发布的词根
     if (!isAdmin && r.status !== 'approved') return false;
+    if (r.deleted) return false;
     if (cat && r.cat !== cat) return false;
     if (kw) {
       var s = (r.name + r.en + r.mean + r.src + r.cat + (r.examples||[]).join('')).toLowerCase();
@@ -2704,8 +2733,22 @@ function renderRoots() {
     }
     return true;
   });
-  var totalApproved = roots.filter(function(r){return r.status==='approved'}).length;
-  stat.textContent = '共收录 ' + totalApproved + ' 个已发布词根' + (list.length !== totalApproved ? '，当前显示 ' + list.length + ' 个' : '');
+  // 热门词根筛选
+  if (window._hotRootFilter) {
+    list = list.filter(function(r) {
+      var relCount = words.filter(function(w) {
+        if (w.status !== 'approved') return false;
+        var parts = (w.en || '').toLowerCase().split('_');
+        return parts.indexOf(r.en.toLowerCase()) >= 0;
+      }).length;
+      return relCount >= 5;
+    });
+    window._hotRootFilter = false;
+    stat.textContent = '🔥 热门词根（关联≥5个词条）共 ' + list.length + ' 个';
+  } else {
+    var totalApproved = roots.filter(function(r){return r.status==='approved'}).length;
+    stat.textContent = '共收录 ' + totalApproved + ' 个已发布词根' + (list.length !== totalApproved ? '，当前显示 ' + list.length + ' 个' : '');
+  }
   grid.innerHTML = '';
   if (!list.length) { empty.style.display = 'block'; return; }
   empty.style.display = 'none';
@@ -4064,7 +4107,39 @@ function loadReportCoverage() {
 }
 
 </script>
-<style>@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}</style>
+<style>@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.fg{position:relative}
+.fg .clear-btn{display:none;position:absolute;right:8px;top:50%;transform:translateY(25%);cursor:pointer;color:var(--text3);font-size:14px;line-height:1;padding:2px 4px;border-radius:50%;transition:color .2s;z-index:1}
+.fg .clear-btn:hover{color:var(--primary)}
+.fg input:not(:placeholder-shown)~.clear-btn,.fg textarea:not(:placeholder-shown)~.clear-btn{display:block}
+</style>
+
+<!-- 回到顶部按钮 -->
+<div id="backToTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" style="display:none;position:fixed;bottom:40px;right:40px;width:44px;height:44px;border-radius:50%;background:rgba(232,115,12,.85);color:#fff;font-size:20px;cursor:pointer;z-index:9998;backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,.2);transition:all .3s;align-items:center;justify-content:center" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">↑</div>
+<script>
+window.addEventListener('scroll', function() {
+  var btn = document.getElementById('backToTop');
+  if (window.scrollY > 300) { btn.style.display = 'flex'; }
+  else { btn.style.display = 'none'; }
+});
+// 给所有 .fg 内的 input 和 textarea 加一键清除按钮
+document.addEventListener('DOMContentLoaded', function() {
+  document.addEventListener('input', function(e) {
+    var el = e.target;
+    if ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') && el.closest('.fg')) {
+      var clearBtn = el.parentElement.querySelector('.clear-btn');
+      if (!clearBtn) {
+        clearBtn = document.createElement('span');
+        clearBtn.className = 'clear-btn';
+        clearBtn.textContent = '✕';
+        clearBtn.onclick = function() { el.value = ''; el.dispatchEvent(new Event('input')); el.focus(); clearBtn.style.display = 'none'; };
+        el.parentElement.appendChild(clearBtn);
+      }
+      clearBtn.style.display = el.value ? 'block' : 'none';
+    }
+  });
+});
+</script>
 </body>
 </html>
 
