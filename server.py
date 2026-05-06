@@ -299,10 +299,13 @@ def get_db():
         # PostgreSQL 自动迁移：给已有 words 表加新字段（用小写列名）
         for col in ('datatype', 'datalen', 'enumvalues'):
             try:
-                raw_conn.cursor().execute(f"ALTER TABLE words ADD COLUMN {col} TEXT DEFAULT ''")
-                raw_conn.commit()
+                raw_conn.cursor().execute(f"ALTER TABLE words ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
             except:
-                raw_conn.rollback()
+                pass
+        try:
+            raw_conn.commit()
+        except:
+            raw_conn.rollback()
         _init_admin_account(conn)
         conn.commit()
         return conn
