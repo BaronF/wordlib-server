@@ -1575,7 +1575,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 content = f.read()
             self.send_response(200)
             self.send_header('Content-Type', ct_map.get(ext, 'application/octet-stream'))
+            # 对文本文件启用 gzip 压缩
+            accept_enc = self.headers.get('Accept-Encoding', '')
+            if 'gzip' in accept_enc and ext in ('.html', '.js', '.css', '.json'):
+                import gzip as _gzip
+                content = _gzip.compress(content)
+                self.send_header('Content-Encoding', 'gzip')
             self.send_header('Content-Length', len(content))
+            self.send_header('Cache-Control', 'public, max-age=300')
             self.end_headers()
             self.wfile.write(content)
         else:
