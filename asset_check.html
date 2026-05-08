@@ -322,12 +322,11 @@ function extractFromElementsSync(elements, fname) {
       if (txt==='ER图'||txt==='DB清单') { inDef=false; continue; }
       if (txt==='数据字典') continue;
       txt = txt.replace(/[\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
-      // 匹配表名段落：xxx（yyy）或 xxx(yyy)
+      // 匹配表名段落：xxx（yyy）或 xxx(yyy)（英文名在前）
       var tblMatch = txt.match(/^([a-zA-Z][a-zA-Z0-9_]*)[\s]*[（(](.+?)[）)]/);
       if (tblMatch) {
         var parsedEn = tblMatch[1].trim();
         var parsedCn = tblMatch[2].trim();
-        // 尝试从 L4 精确/模糊匹配
         var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
         if (l4Match) {
           curTblEn = l4Match.en;
@@ -337,6 +336,30 @@ function extractFromElementsSync(elements, fname) {
           curTblEn = parsedEn;
           curTblCn = parsedCn;
         }
+        defTblIdx++;
+        inDef = true;
+        continue;
+      }
+      // 匹配表名段落：中文名：英文名 格式（如 "包装机主档：qmpc_mpl_package_main"）
+      var cnEnMatch = txt.match(/^(.+?)[：:]([a-zA-Z][a-zA-Z0-9_]+)\s*$/);
+      if (cnEnMatch) {
+        var parsedCn = cnEnMatch[1].trim();
+        var parsedEn = cnEnMatch[2].trim();
+        var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
+        if (l4Match) { curTblEn = l4Match.en; curTblCn = l4Match.cn; l4Match.used = true; }
+        else { curTblEn = parsedEn; curTblCn = parsedCn; }
+        defTblIdx++;
+        inDef = true;
+        continue;
+      }
+      // 匹配表名段落：中文名（英文名）格式（如 "包装档选用（qmpc_mpl_package_dtl）"）
+      var cnBracketMatch = txt.match(/^([\u4e00-\u9fff].+?)[（(]([a-zA-Z][a-zA-Z0-9_]+)[）)]\s*$/);
+      if (cnBracketMatch) {
+        var parsedCn = cnBracketMatch[1].trim();
+        var parsedEn = cnBracketMatch[2].trim();
+        var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
+        if (l4Match) { curTblEn = l4Match.en; curTblCn = l4Match.cn; l4Match.used = true; }
+        else { curTblEn = parsedEn; curTblCn = parsedCn; }
         defTblIdx++;
         inDef = true;
         continue;
