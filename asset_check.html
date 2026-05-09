@@ -509,13 +509,17 @@ function parseXlsx(buf, fname) {
   if(l5eCol<0) l5eCol=9; if(l5cCol<0) l5cCol=10;
 
   var l4=[], l5=[], seen={};
+  var lastL4e='', lastL4c='', lastMod='';
   for (var r=1;r<data.length;r++) {
     var row=data[r];
     var l4e=String(row[l4eCol]||'').trim(), l4c=String(row[l4cCol]||'').trim();
     var l5e=String(row[l5eCol]||'').trim(), l5c=String(row[l5cCol]||'').trim();
     var mod=String(row[modCol>=0?modCol:1]||'').trim();
-    if(l4e&&!seen[l4e]){seen[l4e]=1;l4.push({mod:mod,en:l4e,cn:l4c,pk:'',fk:''})}
-    if(l5e||l5c){l5.push({mod:mod,tbl_en:l4e,tbl_cn:l4c,en:l5e,cn:l5c,pkfk:'',tp:String(row[tpCol>=0?tpCol:13]||''),len:String(row[lenCol>=0?lenCol:15]||''),nul:''})}
+    // 向上填充：合并单元格中 L4 列为空时用上一行的值
+    if(l4e) { lastL4e=l4e; lastL4c=l4c; if(mod) lastMod=mod; }
+    else { l4e=lastL4e; l4c=lastL4c; if(!mod) mod=lastMod; }
+    if(l4e&&!seen[l4e]){seen[l4e]=1;l4.push({mod:mod||lastMod,en:l4e,cn:l4c,pk:'',fk:''})}
+    if(l5e||l5c){l5.push({mod:mod||lastMod,tbl_en:l4e,tbl_cn:l4c,en:l5e,cn:l5c,pkfk:'',tp:String(row[tpCol>=0?tpCol:13]||''),len:String(row[lenCol>=0?lenCol:15]||''),nul:''})}
   }
   return {l4:l4, l5:l5};
 }
