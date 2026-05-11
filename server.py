@@ -1095,21 +1095,25 @@ def _import_extracted_roots(roots_list, mode='skip'):
 # ========== 批量操作辅助函数（任务 8.1） ==========
 
 def _batch_approve_words(word_ids, target_status, operator='system'):
-    """批量审核词条，最多 500 条（优化：批量UPDATE，不逐条创建版本）"""
+    """批量审核词条，最多 500 条（优化：批量UPDATE）"""
     if len(word_ids) > 500:
         return {'success': 0, 'failed': [{'id': 0, 'reason': '单次最多处理500条'}]}
     conn = get_db()
     now = datetime.datetime.now().strftime('%Y-%m-%d')
     try:
-        # 批量更新状态（一条SQL搞定）
         if USE_PG:
-            conn.execute("UPDATE words SET status=?, time=? WHERE id = ANY(?) AND deleted=0",
-                        (target_status, now, word_ids))
+            # PostgreSQL: 直接用 raw SQL + psycopg2 的 ANY 语法
+            raw_conn = conn._conn
+            cur = raw_conn.cursor()
+            cur.execute("UPDATE words SET status=%s, time=%s WHERE id = ANY(%s) AND deleted=0",
+                       (target_status, now, word_ids))
+            raw_conn.commit()
+            cur.close()
         else:
             placeholders = ','.join(['?'] * len(word_ids))
             conn.execute(f"UPDATE words SET status=?, time=? WHERE id IN ({placeholders}) AND deleted=0",
                         [target_status, now] + word_ids)
-        conn.commit()
+            conn.commit()
         conn.close()
         return {'success': len(word_ids), 'failed': []}
     except Exception as e:
