@@ -723,13 +723,11 @@ loadRootsFromStorage();
 // ===== 词条：改为逐条API操作 =====
 var STORAGE_KEY = 'wordlib_data';
 function saveToStorage() { /* 不再整体保存，各操作函数直接调API */ }
-function loadFromStorage() {
-  // 从后端分页加载词条
-  try {
-    var data = apiCallSync('GET', '/api/words?size=9999');
+function loadFromStorage(callback) {
+  // 从后端加载词条（异步版本）
+  authFetch('/api/words?size=9999').then(function(r) { return r.json(); }).then(function(data) {
     if (data && data.data && data.data.length > 0) {
       words = data.data.map(function(w) {
-        // PostgreSQL 列名小写兼容
         if (!w.dataType && w.datatype) w.dataType = w.datatype;
         if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
         if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
@@ -738,20 +736,27 @@ function loadFromStorage() {
         return w;
       });
       nextId = Math.max.apply(null, words.map(function(w){return w.id;})) + 1;
-      return;
     }
-  } catch(e) { console.log('后端加载词条失败:', e); }
-  // 如果后端没数据，用默认数据并初始化到后端
-  if (words.length > 0) {
-    apiCall('POST', '/api/init_words', words, function(resp) {
-      console.log('词条初始化完成:', resp);
+    if (callback) callback();
+  }).catch(function(e) {
+    console.log('后端加载词条失败:', e);
+    // 降级：同步重试一次
+    try {
       var data = apiCallSync('GET', '/api/words?size=9999');
       if (data && data.data && data.data.length > 0) {
-        words = data.data;
+        words = data.data.map(function(w) {
+          if (!w.dataType && w.datatype) w.dataType = w.datatype;
+          if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
+          if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
+          if (!w.cnDesc && w.cndesc) w.cnDesc = w.cndesc;
+          if (!w.enDesc && w.endesc) w.enDesc = w.endesc;
+          return w;
+        });
         nextId = Math.max.apply(null, words.map(function(w){return w.id;})) + 1;
       }
-    });
-  }
+    } catch(e2) { console.log('同步重试也失败:', e2); }
+    if (callback) callback();
+  });
 }
 loadFromStorage();
 // 初始化权限控制（默认普通用户，隐藏管理员入口）
@@ -3696,8 +3701,12 @@ function doImportWordsConfirm() {
       if (resp.skipped) msg += '，跳过重复 ' + resp.skipped + ' 个';
       if (resp.src_updated) msg += '，来源合并 ' + resp.src_updated + ' 个';
       showToast(msg, '#22c55e');
-      loadFromStorage();
-      updatePendingBadge();
+      // 延迟1秒再加载，让服务器释放连接
+      setTimeout(function() {
+        loadFromStorage(function() {
+          updatePendingBadge();
+        });
+      }, 1000);
       if (confirm('导入成功！' + resp.count + ' 个词条已进入草稿状态。\n是否前往审核中心审核发布？')) {
         switchTab('audit');
         switchAuditTab('word');
