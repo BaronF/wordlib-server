@@ -758,7 +758,11 @@ function loadFromStorage(callback) {
     if (callback) callback();
   });
 }
-loadFromStorage();
+loadFromStorage(function() {
+  // 数据加载完成后渲染当前页面
+  if (currentTab === 'roots') renderRoots();
+  else doSearch();
+});
 // 初始化权限控制（默认普通用户，隐藏管理员入口）
 document.querySelectorAll('.admin-only-root').forEach(function(el) { el.style.display = isAdmin ? '' : 'none'; });
 
