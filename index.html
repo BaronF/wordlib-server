@@ -724,7 +724,27 @@ loadRootsFromStorage();
 var STORAGE_KEY = 'wordlib_data';
 function saveToStorage() { /* 不再整体保存，各操作函数直接调API */ }
 function loadFromStorage(callback) {
-  // 从后端加载词条（异步版本）
+  // 从后端加载词条
+  // 首次加载用同步确保数据到位，后续用异步
+  if (!callback) {
+    // 同步模式（页面初始化）
+    try {
+      var data = apiCallSync('GET', '/api/words?size=9999');
+      if (data && data.data && data.data.length > 0) {
+        words = data.data.map(function(w) {
+          if (!w.dataType && w.datatype) w.dataType = w.datatype;
+          if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
+          if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
+          if (!w.cnDesc && w.cndesc) w.cnDesc = w.cndesc;
+          if (!w.enDesc && w.endesc) w.enDesc = w.endesc;
+          return w;
+        });
+        nextId = Math.max.apply(null, words.map(function(w){return w.id;})) + 1;
+      }
+    } catch(e) { console.log('加载词条失败:', e); }
+    return;
+  }
+  // 异步模式（操作后刷新）
   authFetch('/api/words?size=9999').then(function(r) { return r.json(); }).then(function(data) {
     if (data && data.data && data.data.length > 0) {
       words = data.data.map(function(w) {
@@ -739,30 +759,13 @@ function loadFromStorage(callback) {
     }
     if (callback) callback();
   }).catch(function(e) {
-    console.log('后端加载词条失败:', e);
-    // 降级：同步重试一次
-    try {
-      var data = apiCallSync('GET', '/api/words?size=9999');
-      if (data && data.data && data.data.length > 0) {
-        words = data.data.map(function(w) {
-          if (!w.dataType && w.datatype) w.dataType = w.datatype;
-          if (!w.dataLen && w.datalen) w.dataLen = w.datalen;
-          if (!w.enumValues && w.enumvalues) w.enumValues = w.enumvalues;
-          if (!w.cnDesc && w.cndesc) w.cnDesc = w.cndesc;
-          if (!w.enDesc && w.endesc) w.enDesc = w.endesc;
-          return w;
-        });
-        nextId = Math.max.apply(null, words.map(function(w){return w.id;})) + 1;
-      }
-    } catch(e2) { console.log('同步重试也失败:', e2); }
+    console.log('异步加载词条失败:', e);
     if (callback) callback();
   });
 }
-loadFromStorage(function() {
-  // 数据加载完成后渲染当前页面
-  if (currentTab === 'roots') renderRoots();
-  else doSearch();
-});
+loadFromStorage();
+// 初始化完成后渲染
+renderRoots();
 // 初始化权限控制（默认普通用户，隐藏管理员入口）
 document.querySelectorAll('.admin-only-root').forEach(function(el) { el.style.display = isAdmin ? '' : 'none'; });
 
@@ -3705,12 +3708,13 @@ function doImportWordsConfirm() {
       if (resp.skipped) msg += '，跳过重复 ' + resp.skipped + ' 个';
       if (resp.src_updated) msg += '，来源合并 ' + resp.src_updated + ' 个';
       showToast(msg, '#22c55e');
-      // 延迟1秒再加载，让服务器释放连接
+      // 异步刷新数据
       setTimeout(function() {
         loadFromStorage(function() {
           updatePendingBadge();
+          doSearch();
         });
-      }, 1000);
+      }, 500);
       if (confirm('导入成功！' + resp.count + ' 个词条已进入草稿状态。\n是否前往审核中心审核发布？')) {
         switchTab('audit');
         switchAuditTab('word');
