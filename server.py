@@ -2051,10 +2051,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 write_log(f'init_words 第1条样本: {json.dumps(items[0], ensure_ascii=False)[:200]}')
             conn = get_db()
             count = 0
+            src_updated = 0
             try:
+                # 一次性查出已有词条的 en -> abbr 映射（用于来源合并）
+                existing_words = {}
+                rows = conn.execute("SELECT id, en, abbr FROM words WHERE deleted=0").fetchall()
+                for r in rows:
+                    existing_words[r['en'].lower() if r['en'] else ''] = {'id': r['id'], 'abbr': r['abbr'] or ''}
+
                 # 批量插入优化：每 100 条提交一次
                 batch_size = 100
                 for i, w in enumerate(items):
+                    en_lower = (w.get('en', '') or '').lower()
+                    # 如果已存在同 en 的词条，合并来源
+                    if en_lower and en_lower in existing_words:
+                        existing = existing_words[en_lower]
+                        old_abbr = existing['abbr']
+                        new_abbr = w.get('abbr', '')
+                        # 提取来源标签（格式：来源:xxx）
+                        old_src = old_abbr.replace('来源:', '') if old_abbr.startswith('来源:') else old_abbr
+                        new_src = new_abbr.replace('来源:', '') if new_abbr.startswith('来源:') else new_abbr
+                        if new_src and new_src not in old_src.split('+'):
+                            merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
+                            merged_abbr = '来源:' + merged_src
+                            conn.execute("UPDATE words SET abbr=? WHERE id=?", (merged_abbr, existing['id']))
+                            src_updated += 1
+                        # 跳过插入（已存在）
+                        continue
+
                     conn.execute(
                         """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -2076,8 +2100,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(500, {"error": f"导入失败(第{count+1}条): {str(e)[:200]}", "count": count})
                 return
             conn.close()
-            self._log_op('批量初始化词条', f'共{count}条')
-            self._send_json(200, {"msg": "ok", "count": count})
+            self._log_op('批量初始化词条', f'新增{count}条, 来源合并{src_updated}条')
+            self._send_json(200, {"msg": "ok", "count": count, "src_updated": src_updated})
             return
 
         if path == '/api/init_roots':
