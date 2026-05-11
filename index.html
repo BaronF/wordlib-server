@@ -3676,6 +3676,7 @@ function doImportWordsConfirm() {
   apiCall('POST', '/api/init_words', filteredWords, function(resp) {
     if (resp && resp.count !== undefined) {
       var msg = '新增 ' + resp.count + ' 个词条';
+      if (resp.skipped) msg += '，跳过重复 ' + resp.skipped + ' 个';
       if (resp.src_updated) msg += '，来源合并 ' + resp.src_updated + ' 个';
       showToast(msg, '#22c55e');
       loadFromStorage();

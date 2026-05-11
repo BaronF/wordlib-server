@@ -2051,43 +2051,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 write_log(f'init_words 第1条样本: {json.dumps(items[0], ensure_ascii=False)[:200]}')
             conn = get_db()
             count = 0
+            skipped = 0
             src_updated = 0
             try:
-                # 一次性查出已有词条的 en -> abbr 映射（用于来源合并）
+                # 一次性查出已有词条的 en -> abbr 映射（用于来源合并和去重）
                 existing_words = {}
                 rows = conn.execute("SELECT id, en, abbr FROM words WHERE deleted=0").fetchall()
                 for r in rows:
                     existing_words[r['en'].lower() if r['en'] else ''] = {'id': r['id'], 'abbr': r['abbr'] or ''}
 
+                # 本批次内去重（按 en 去重，保留第一条）
+                seen_en = set(existing_words.keys())
+                # 多语言后缀黑名单
+                _lang_suffixes = ('_cn', '_tc', '_en', '_sc', '_jp', '_tw')
+
                 # 批量插入优化：每 100 条提交一次
                 batch_size = 100
                 for i, w in enumerate(items):
-                    en_lower = (w.get('en', '') or '').lower()
-                    # 如果已存在同 en 的词条，合并来源
-                    if en_lower and en_lower in existing_words:
-                        existing = existing_words[en_lower]
-                        old_abbr = existing['abbr']
-                        new_abbr = w.get('abbr', '')
-                        # 提取来源标签（格式：来源:xxx）
-                        old_src = old_abbr.replace('来源:', '') if old_abbr.startswith('来源:') else old_abbr
-                        new_src = new_abbr.replace('来源:', '') if new_abbr.startswith('来源:') else new_abbr
-                        if new_src and new_src not in old_src.split('+'):
-                            merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
-                            merged_abbr = '来源:' + merged_src
-                            conn.execute("UPDATE words SET abbr=? WHERE id=?", (merged_abbr, existing['id']))
-                            src_updated += 1
-                        # 跳过插入（已存在）
+                    en = w.get('en', '') or ''
+                    en_lower = en.lower().strip()
+                    if not en_lower:
+                        skipped += 1
                         continue
 
+                    # 去重：本批次内已有同 en 的跳过
+                    if en_lower in seen_en:
+                        # 已存在的词条合并来源
+                        if en_lower in existing_words:
+                            existing = existing_words[en_lower]
+                            old_abbr = existing['abbr']
+                            new_abbr = w.get('abbr', '')
+                            old_src = old_abbr.replace('来源:', '') if old_abbr.startswith('来源:') else old_abbr
+                            new_src = new_abbr.replace('来源:', '') if new_abbr.startswith('来源:') else new_abbr
+                            if new_src and new_src not in old_src.split('+'):
+                                merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
+                                conn.execute("UPDATE words SET abbr=? WHERE id=?", ('来源:' + merged_src, existing['id']))
+                                src_updated += 1
+                        skipped += 1
+                        continue
+
+                    # 过滤：单复数重复（如果去掉末尾s后已存在，跳过）
+                    if en_lower.endswith('s') and en_lower[:-1] in seen_en:
+                        skipped += 1
+                        continue
+
+                    # 过滤：多语言后缀变体（如 remark_cn，如果 remark 已存在则跳过）
+                    is_lang_variant = False
+                    for suffix in _lang_suffixes:
+                        if en_lower.endswith(suffix):
+                            base = en_lower[:-len(suffix)]
+                            if base in seen_en:
+                                is_lang_variant = True
+                                break
+                    if is_lang_variant:
+                        skipped += 1
+                        continue
+
+                    # 插入新词条
                     conn.execute(
                         """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                        (w.get('cn',''), w.get('en',''), w.get('cat',''),
+                        (w.get('cn',''), en, w.get('cat',''),
                          w.get('roots',''), w.get('score',0), w.get('abbr',''),
                          w.get('cnDesc',''), w.get('enDesc',''), w.get('ref',''),
                          w.get('dataType',''), w.get('dataLen',''), w.get('enumValues',''),
                          w.get('status','draft'), w.get('time',''))
                     )
+                    seen_en.add(en_lower)
                     count += 1
                     if count % batch_size == 0:
                         conn.commit()
@@ -2100,8 +2130,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(500, {"error": f"导入失败(第{count+1}条): {str(e)[:200]}", "count": count})
                 return
             conn.close()
-            self._log_op('批量初始化词条', f'新增{count}条, 来源合并{src_updated}条')
-            self._send_json(200, {"msg": "ok", "count": count, "src_updated": src_updated})
+            self._log_op('批量初始化词条', f'新增{count}条, 跳过{skipped}条, 来源合并{src_updated}条')
+            self._send_json(200, {"msg": "ok", "count": count, "skipped": skipped, "src_updated": src_updated})
             return
 
         if path == '/api/init_roots':
