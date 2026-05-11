@@ -659,6 +659,16 @@ def _extract_roots_from_xlsx(filepath):
     """
     from collections import Counter
     fname = os.path.basename(filepath).lower()
+    # 从文件名提取来源标签
+    import re as _re_src
+    orig_fname = os.path.basename(filepath)
+    src_label = '数据资产'
+    # 匹配 "华新细部设计-XXX.xlsx" 格式
+    m = _re_src.search(r'[_\-]([\u4e00-\u9fff]+?)(?:L\d|[（(]|\.|$)', orig_fname)
+    if m: src_label = m.group(1)
+    # 匹配 "华新细部设计-XXX.xlsx" 格式
+    m2 = _re_src.search(r'设计[_\-]([\u4e00-\u9fff]+)', orig_fname)
+    if m2: src_label = m2.group(1)
 
     # 收集所有英文-中文字段对
     field_pairs = set()  # (en, cn)
@@ -698,7 +708,7 @@ def _extract_roots_from_xlsx(filepath):
         word_list.append({
             'cn': cn, 'en': en, 'cat': cat,
             'roots': json.dumps([cn + '-' + cn], ensure_ascii=False),
-            'score': 0, 'abbr': '', 'cnDesc': '', 'enDesc': '',
+            'score': 0, 'abbr': '来源:' + src_label, 'cnDesc': '', 'enDesc': '',
             'ref': '', 'dataType': tp, 'dataLen': ln, 'enumValues': '', 'status': 'draft',
             'time': datetime.datetime.now().strftime('%Y-%m-%d')
         })
@@ -801,7 +811,7 @@ def _extract_roots_from_xlsx(filepath):
             'name': cn_name,
             'en': root,
             'mean': cn_name,
-            'src': '数据资产',
+            'src': src_label,
             'cat': cat,
             'status': 'approved',
             'examples': list(root_examples[root])[:5],
