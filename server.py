@@ -1798,7 +1798,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._log_op('批量转小写')
             self._send_json(200, {'msg': 'ok', 'roots': len(all_roots), 'words': len(all_words)})
             return
+
+        # === 批量审核API ===
+        if path == '/api/words/batch_approve':
+            word_ids = data.get('ids', [])
             target_status = data.get('status', 'approved')
+            if not word_ids:
+                self._send_json(400, {'error': '请提供词条ID列表'})
+                return
             result = _batch_approve_words(word_ids, target_status)
             self._log_op('批量审核', f'成功:{result["success"]}, 失败:{len(result["failed"])}')
             self._send_json(200, result)
