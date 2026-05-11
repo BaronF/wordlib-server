@@ -1695,9 +1695,63 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {'msg': 'ok', 'count': count})
             return
 
-        # === 批量审核API（必须在 /api/words 之前） ===
-        if path == '/api/words/batch_approve':
-            word_ids = data.get('ids', [])
+        # === 批量更新来源API（管理员） ===
+        if path == '/api/admin/update_source':
+            auth_header = self.headers.get('Authorization', '')
+            tk = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
+            cur_user = _verify_token(tk) if tk else None
+            if not cur_user or cur_user.get('role') != 'admin':
+                self._send_json(403, {'error': '仅管理员可操作'})
+                return
+            old_src = data.get('old_src', '')
+            new_src = data.get('new_src', '')
+            target = data.get('target', 'all')  # roots / words / all
+            conn = get_db()
+            count = 0
+            if target in ('roots', 'all'):
+                if old_src:
+                    conn.execute("UPDATE roots SET src=? WHERE src=?", (new_src, old_src))
+                else:
+                    conn.execute("UPDATE roots SET src=?", (new_src,))
+                count += 1
+            if target in ('words', 'all'):
+                if old_src:
+                    conn.execute("UPDATE words SET abbr=? WHERE abbr=?", ('来源:' + new_src, '来源:' + old_src))
+                else:
+                    conn.execute("UPDATE words SET abbr=? WHERE abbr='' OR abbr IS NULL", ('来源:' + new_src,))
+                count += 1
+            conn.commit()
+            conn.close()
+            self._log_op('批量更新来源', f'{old_src} → {new_src}, target={target}')
+            self._send_json(200, {'msg': 'ok'})
+            return
+
+        # === 批量转小写API（管理员） ===
+        if path == '/api/admin/to_lowercase':
+            auth_header = self.headers.get('Authorization', '')
+            tk = auth_header.replace('Bearer ', '') if auth_header.startswith('Bearer ') else ''
+            cur_user = _verify_token(tk) if tk else None
+            if not cur_user or cur_user.get('role') != 'admin':
+                self._send_json(403, {'error': '仅管理员可操作'})
+                return
+            conn = get_db()
+            # 词根英文转小写
+            all_roots = conn.execute("SELECT id, en FROM roots WHERE deleted=0").fetchall()
+            for r in all_roots:
+                en = r['en']
+                if en and en != en.lower():
+                    conn.execute("UPDATE roots SET en=? WHERE id=?", (en.lower(), r['id']))
+            # 词条英文转小写
+            all_words = conn.execute("SELECT id, en FROM words WHERE deleted=0").fetchall()
+            for w in all_words:
+                en = w['en']
+                if en and en != en.lower():
+                    conn.execute("UPDATE words SET en=? WHERE id=?", (en.lower(), w['id']))
+            conn.commit()
+            conn.close()
+            self._log_op('批量转小写')
+            self._send_json(200, {'msg': 'ok', 'roots': len(all_roots), 'words': len(all_words)})
+            return
             target_status = data.get('status', 'approved')
             result = _batch_approve_words(word_ids, target_status)
             self._log_op('批量审核', f'成功:{result["success"]}, 失败:{len(result["failed"])}')
