@@ -3803,7 +3803,7 @@ function batchApproveAll() {
   for (var i = 0; i < ids.length; i += batchSize) {
     batches.push(ids.slice(i, i + batchSize));
   }
-  showToast('正在发布 ' + ids.length + ' 条词条（' + batches.length + ' 批）...', 'var(--primary)');
+  showToast('正在发布 ' + ids.length + ' 条词条（' + batches.length + ' 批）...请稍候', 'var(--primary)');
   var done = 0;
   batches.forEach(function(batch) {
     apiCall('POST', '/api/words/batch_approve', { ids: batch, status: 'approved' }, function(resp) {
@@ -3814,9 +3814,13 @@ function batchApproveAll() {
       }
       if (done >= batches.length) {
         showToast('一键发布完成：成功 ' + totalSuccess + ' 条' + (totalFail > 0 ? '，失败 ' + totalFail + ' 条' : ''), '#22c55e');
-        loadFromStorage();
-        renderAudit();
-        updatePendingBadge();
+        // 异步刷新，不阻塞页面
+        setTimeout(function() {
+          loadFromStorage(function() {
+            renderAudit();
+            updatePendingBadge();
+          });
+        }, 300);
       }
     });
   });

@@ -1095,26 +1095,26 @@ def _import_extracted_roots(roots_list, mode='skip'):
 # ========== 批量操作辅助函数（任务 8.1） ==========
 
 def _batch_approve_words(word_ids, target_status, operator='system'):
-    """批量审核词条，最多 500 条"""
+    """批量审核词条，最多 500 条（优化：批量UPDATE，不逐条创建版本）"""
     if len(word_ids) > 500:
         return {'success': 0, 'failed': [{'id': 0, 'reason': '单次最多处理500条'}]}
     conn = get_db()
-    success, failed = 0, []
-    for wid in word_ids:
-        try:
-            old_row = conn.execute("SELECT * FROM words WHERE id=? AND deleted=0", (wid,)).fetchone()
-            if not old_row:
-                failed.append({'id': wid, 'reason': '词条不存在'})
-                continue
-            old_data = dict(old_row)
-            _create_word_version(conn, wid, old_data, '审核变更', operator)
-            conn.execute("UPDATE words SET status=?, time=? WHERE id=?", (target_status, datetime.datetime.now().strftime('%Y-%m-%d'), wid))
-            success += 1
-        except Exception as e:
-            failed.append({'id': wid, 'reason': str(e)})
-    conn.commit()
-    conn.close()
-    return {'success': success, 'failed': failed}
+    now = datetime.datetime.now().strftime('%Y-%m-%d')
+    try:
+        # 批量更新状态（一条SQL搞定）
+        if USE_PG:
+            conn.execute("UPDATE words SET status=?, time=? WHERE id = ANY(?) AND deleted=0",
+                        (target_status, now, word_ids))
+        else:
+            placeholders = ','.join(['?'] * len(word_ids))
+            conn.execute(f"UPDATE words SET status=?, time=? WHERE id IN ({placeholders}) AND deleted=0",
+                        [target_status, now] + word_ids)
+        conn.commit()
+        conn.close()
+        return {'success': len(word_ids), 'failed': []}
+    except Exception as e:
+        conn.close()
+        return {'success': 0, 'failed': [{'id': 0, 'reason': str(e)}]}
 
 def _log_import_error(conn, batch_id, row_num, reason, raw_data):
     """记录导入错误到 import_logs 表"""
