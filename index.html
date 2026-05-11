@@ -3371,7 +3371,11 @@ function loadExtractHistory() {
 }
 
 function loadExtractHistoryDetail(id) {
+  // 显示加载状态
+  document.getElementById('extractLoading').style.display = 'block';
+  document.getElementById('extractResult').style.display = 'none';
   authFetch('/api/extract_history/' + id).then(function(r) { return r.json(); }).then(function(data) {
+    document.getElementById('extractLoading').style.display = 'none';
     var roots = data.roots || [];
     var words = data.words || [];
     if (roots.length) {
@@ -3384,7 +3388,10 @@ function loadExtractHistoryDetail(id) {
     } else {
       showToast('该记录无数据', '#ef4444');
     }
-  }).catch(function(e) { showToast('加载失败：' + e.message, '#ef4444'); });
+  }).catch(function(e) {
+    document.getElementById('extractLoading').style.display = 'none';
+    showToast('加载失败：' + e.message, '#ef4444');
+  });
 }
 
 function doExtractRoots(input) {

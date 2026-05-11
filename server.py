@@ -25,6 +25,8 @@ else:
     DATA_DIR = '/data' if os.path.isdir('/data') else SCRIPT_DIR
     DB_FILE = os.path.join(DATA_DIR, 'wordlib.db')
 
+_db_initialized = False  # 标记数据库是否已初始化（避免每次 get_db 都建表）
+
 def _pg_connect():
     """创建 PostgreSQL 连接"""
     conn = psycopg2.connect(DATABASE_URL)
@@ -187,127 +189,145 @@ def _verify_token(token):
     conn.close()
     return result
 
+def _ensure_pg_schema(raw_conn, conn):
+    """PostgreSQL 建表和迁移（仅首次调用）"""
+    global _db_initialized
+    if _db_initialized:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS words (
+            id SERIAL PRIMARY KEY,
+            cn TEXT NOT NULL DEFAULT '',
+            en TEXT NOT NULL DEFAULT '',
+            cat TEXT DEFAULT '',
+            roots TEXT DEFAULT '',
+            score REAL DEFAULT 0,
+            abbr TEXT DEFAULT '',
+            "cnDesc" TEXT DEFAULT '',
+            "enDesc" TEXT DEFAULT '',
+            ref TEXT DEFAULT '',
+            datatype TEXT DEFAULT '',
+            datalen TEXT DEFAULT '',
+            enumvalues TEXT DEFAULT '',
+            status TEXT DEFAULT 'draft',
+            time TEXT DEFAULT CURRENT_DATE,
+            deleted INTEGER DEFAULT 0,
+            deleted_time TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS roots (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            en TEXT DEFAULT '',
+            mean TEXT DEFAULT '',
+            src TEXT DEFAULT '',
+            cat TEXT DEFAULT '',
+            status TEXT DEFAULT 'draft',
+            examples TEXT DEFAULT '[]',
+            deleted INTEGER DEFAULT 0,
+            deleted_time TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS asset_history (
+            id SERIAL PRIMARY KEY,
+            filename TEXT NOT NULL,
+            l4_count INTEGER DEFAULT 0,
+            l5_count INTEGER DEFAULT 0,
+            issue_count INTEGER DEFAULT 0,
+            change_count INTEGER DEFAULT 0,
+            result_json TEXT DEFAULT '',
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS word_versions (
+            id SERIAL PRIMARY KEY,
+            word_id INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            snapshot TEXT NOT NULL,
+            op_type TEXT NOT NULL,
+            operator TEXT DEFAULT 'system',
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS import_logs (
+            id SERIAL PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            row_num INTEGER,
+            reason TEXT,
+            raw_data TEXT,
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            last_active TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS synonyms (
+            id SERIAL PRIMARY KEY,
+            word TEXT NOT NULL,
+            standard TEXT NOT NULL,
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS extract_history (
+            id SERIAL PRIMARY KEY,
+            filename TEXT NOT NULL,
+            root_count INTEGER DEFAULT 0,
+            field_count INTEGER DEFAULT 0,
+            result_json TEXT DEFAULT '',
+            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+        )
+    """)
+    # PostgreSQL 自动迁移：给已有 words 表加新字段（用小写列名）
+    for col in ('datatype', 'datalen', 'enumvalues'):
+        try:
+            raw_conn.cursor().execute(f"ALTER TABLE words ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
+        except:
+            pass
+    # 创建索引加速查询
+    try:
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_words_en ON words(en)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_words_deleted ON words(deleted)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_words_time ON words(time)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_words_status ON words(status)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_roots_en ON roots(en)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_roots_deleted ON roots(deleted)")
+        raw_conn.cursor().execute("CREATE INDEX IF NOT EXISTS idx_extract_history_id ON extract_history(id)")
+    except:
+        pass
+    try:
+        raw_conn.commit()
+    except:
+        raw_conn.rollback()
+    _init_admin_account(conn)
+    conn.commit()
+    _db_initialized = True
+
 def get_db():
     if USE_PG:
         raw_conn = _pg_connect()
         conn = PgConnWrapper(raw_conn)
-        # PostgreSQL 建表
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS words (
-                id SERIAL PRIMARY KEY,
-                cn TEXT NOT NULL DEFAULT '',
-                en TEXT NOT NULL DEFAULT '',
-                cat TEXT DEFAULT '',
-                roots TEXT DEFAULT '',
-                score REAL DEFAULT 0,
-                abbr TEXT DEFAULT '',
-                "cnDesc" TEXT DEFAULT '',
-                "enDesc" TEXT DEFAULT '',
-                ref TEXT DEFAULT '',
-                datatype TEXT DEFAULT '',
-                datalen TEXT DEFAULT '',
-                enumvalues TEXT DEFAULT '',
-                status TEXT DEFAULT 'draft',
-                time TEXT DEFAULT CURRENT_DATE,
-                deleted INTEGER DEFAULT 0,
-                deleted_time TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS roots (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL DEFAULT '',
-                en TEXT DEFAULT '',
-                mean TEXT DEFAULT '',
-                src TEXT DEFAULT '',
-                cat TEXT DEFAULT '',
-                status TEXT DEFAULT 'draft',
-                examples TEXT DEFAULT '[]',
-                deleted INTEGER DEFAULT 0,
-                deleted_time TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS asset_history (
-                id SERIAL PRIMARY KEY,
-                filename TEXT NOT NULL,
-                l4_count INTEGER DEFAULT 0,
-                l5_count INTEGER DEFAULT 0,
-                issue_count INTEGER DEFAULT 0,
-                change_count INTEGER DEFAULT 0,
-                result_json TEXT DEFAULT '',
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS word_versions (
-                id SERIAL PRIMARY KEY,
-                word_id INTEGER NOT NULL,
-                version INTEGER NOT NULL,
-                snapshot TEXT NOT NULL,
-                op_type TEXT NOT NULL,
-                operator TEXT DEFAULT 'system',
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS import_logs (
-                id SERIAL PRIMARY KEY,
-                batch_id TEXT NOT NULL,
-                row_num INTEGER,
-                reason TEXT,
-                raw_data TEXT,
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                role TEXT DEFAULT 'user',
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                token TEXT UNIQUE NOT NULL,
-                last_active TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS synonyms (
-                id SERIAL PRIMARY KEY,
-                word TEXT NOT NULL,
-                standard TEXT NOT NULL,
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS extract_history (
-                id SERIAL PRIMARY KEY,
-                filename TEXT NOT NULL,
-                root_count INTEGER DEFAULT 0,
-                field_count INTEGER DEFAULT 0,
-                result_json TEXT DEFAULT '',
-                time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
-            )
-        """)
-        # PostgreSQL 自动迁移：给已有 words 表加新字段（用小写列名）
-        for col in ('datatype', 'datalen', 'enumvalues'):
-            try:
-                raw_conn.cursor().execute(f"ALTER TABLE words ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
-            except:
-                pass
-        try:
-            raw_conn.commit()
-        except:
-            raw_conn.rollback()
-        _init_admin_account(conn)
-        conn.commit()
+        _ensure_pg_schema(raw_conn, conn)
         return conn
     else:
         conn = sqlite3.connect(DB_FILE)
@@ -1031,15 +1051,22 @@ def _extract_fields_from_docx(filepath):
     return field_pairs
 
 def _import_extracted_roots(roots_list, mode='skip'):
-    """将剥离结果导入 roots 表"""
+    """将剥离结果导入 roots 表（批量优化版）"""
     conn = get_db()
     imported, skipped = 0, 0
+
+    # 一次性查出所有已存在的词根（减少逐条查询）
+    existing_map = {}
+    rows = conn.execute("SELECT id, en, src FROM roots WHERE deleted=0").fetchall()
+    for r in rows:
+        existing_map[r['en']] = {'id': r['id'], 'src': r['src'] or ''}
+
     for r in roots_list:
-        existing = conn.execute("SELECT id, src FROM roots WHERE en=? AND deleted=0", (r['en'],)).fetchone()
-        if existing:
+        en = r['en']
+        if en in existing_map:
+            existing = existing_map[en]
             if mode == 'merge':
-                # 追加来源（不重复）
-                old_src = existing['src'] or ''
+                old_src = existing['src']
                 new_src = r.get('src', '')
                 if new_src and new_src not in old_src.split('+'):
                     merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
@@ -1050,8 +1077,7 @@ def _import_extracted_roots(roots_list, mode='skip'):
                      json.dumps(r.get('examples', []), ensure_ascii=False), existing['id']))
                 imported += 1
             else:
-                # skip 模式也追加来源
-                old_src = existing['src'] or ''
+                old_src = existing['src']
                 new_src = r.get('src', '')
                 if new_src and new_src not in old_src.split('+'):
                     merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
@@ -1407,7 +1433,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path.startswith('/api/extract_history/'):
             hid = int(path.split('/')[-1])
             conn = get_db()
-            row = conn.execute("SELECT * FROM extract_history WHERE id=?", (hid,)).fetchone()
+            # 只查需要的字段，避免传输巨大的 result_json 后再解析
+            row = conn.execute("SELECT id, filename, root_count, field_count, result_json, time FROM extract_history WHERE id=?", (hid,)).fetchone()
             conn.close()
             if row:
                 d = row_to_dict(row)
@@ -1421,6 +1448,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             d['roots'] = parsed
                             d['words'] = []
                     except: d['roots'] = []; d['words'] = []
+                else:
+                    d['roots'] = []; d['words'] = []
                 del d['result_json']
                 self._send_json(200, d)
             else:
@@ -2023,7 +2052,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = get_db()
             count = 0
             try:
-                for w in items:
+                # 批量插入优化：每 100 条提交一次
+                batch_size = 100
+                for i, w in enumerate(items):
                     conn.execute(
                         """INSERT INTO words(cn,en,cat,roots,score,abbr,cnDesc,enDesc,ref,dataType,dataLen,enumValues,status,time)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -2034,6 +2065,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          w.get('status','draft'), w.get('time',''))
                     )
                     count += 1
+                    if count % batch_size == 0:
+                        conn.commit()
                 conn.commit()
             except Exception as e:
                 write_log(f'批量导入词条失败(第{count+1}条): {e}')
@@ -2052,6 +2085,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             conn = get_db()
             count = 0
             try:
+                batch_size = 100
                 for r in items:
                     examples = r.get('examples', [])
                     if isinstance(examples, list):
@@ -2064,6 +2098,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          r.get('status','approved'), examples)
                     )
                     count += 1
+                    if count % batch_size == 0:
+                        conn.commit()
                 conn.commit()
             except Exception as e:
                 write_log(f'批量导入词根失败(第{count+1}条): {e}')
