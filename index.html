@@ -3270,9 +3270,10 @@ function loadRecycleBin() {
 function restoreItem(type, id) {
   if (!confirm('确定要恢复该记录吗？')) return;
   apiCall('POST', '/api/recycle_bin/restore', { type: type, id: id }, function(resp) {
-    if (resp && resp.ok) {
+    if (resp && (resp.msg === 'ok' || resp.ok)) {
       showToast('恢复成功', '#22c55e');
       loadRecycleBin();
+      loadFromStorage();
     } else {
       showToast('恢复失败：' + (resp && resp.error || '未知错误'), '#ef4444');
     }
