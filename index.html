@@ -3652,22 +3652,38 @@ function doImportExtractedWords() {
       (conflictList.length ? '<span style="color:#f59e0b">⚠️ 冲突 ' + conflictList.length + '</span>' : '') +
     '</div>';
   if (conflictList.length) {
-    html += '<div style="margin-bottom:12px;padding:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;font-size:12px;max-height:200px;overflow-y:auto">';
-    conflictList.slice(0, 20).forEach(function(c) {
-      html += '<div style="padding:4px 0;border-bottom:1px solid rgba(245,158,11,.1)"><code>' + c.newW.en + '</code> 新: <b>' + c.newW.cn + '</b> ← 库中: <span style="color:var(--text3)">' + c.oldW.cn + '</span></div>';
+    html += '<div style="margin-bottom:12px;padding:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;font-size:12px;max-height:300px;overflow-y:auto">';
+    conflictList.forEach(function(c, idx) {
+      html += '<div style="padding:6px 0;border-bottom:1px solid rgba(245,158,11,.1);display:flex;align-items:center;gap:8px">' +
+        '<code style="flex-shrink:0">' + c.newW.en + '</code> ' +
+        '新: <input id="conflictCn_'+idx+'" value="'+(c.newW.cn||'').replace(/"/g,'&quot;')+'" style="width:100px;padding:2px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--bg3);color:var(--text)">' +
+        ' ← 库中: <span style="color:var(--text3)">' + c.oldW.cn + '</span>' +
+        ' <span style="cursor:pointer;color:var(--primary);font-size:11px;white-space:nowrap" onclick="document.getElementById(\'conflictCn_'+idx+'\').value=\'' + (c.oldW.cn||'').replace(/'/g,"\\'") + '\'">用库中</span>' +
+      '</div>';
     });
-    if (conflictList.length > 20) html += '<div style="color:var(--text3)">...共 ' + conflictList.length + ' 个冲突</div>';
     html += '</div>';
   }
-  html += '<div style="font-size:12px;color:var(--text3);margin-bottom:16px">将导入 <b>' + newList.length + '</b> 个新词条，已存在的 <b>' + existList.length + '</b> 个将自动合并来源</div>' +
+  html += '<div style="font-size:12px;color:var(--text3);margin-bottom:16px">将导入 <b>' + (newList.length + conflictList.length) + '</b> 个词条（含 ' + conflictList.length + ' 个冲突项），已存在的 <b>' + existList.length + '</b> 个将自动合并来源</div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end">' +
       '<button class="btn ghost" onclick="document.getElementById(\'wordImportPreview\').remove()">取消</button>' +
-      '<button class="btn primary" onclick="document.getElementById(\'wordImportPreview\').remove();doImportWordsConfirm()">确认导入</button>' +
+      '<button class="btn primary" onclick="applyConflictEdits();document.getElementById(\'wordImportPreview\').remove();doImportWordsConfirm()">确认导入</button>' +
     '</div></div>';
   overlay.innerHTML = html;
   document.body.appendChild(overlay);
-  // 保存待导入列表（包含已存在的，后端会自动合并来源）
+  // 保存待导入列表和冲突列表
   window._pendingImportWords = filteredWords;
+  window._conflictList = conflictList;
+}
+
+function applyConflictEdits() {
+  // 将冲突项编辑后的中文名应用到待导入列表
+  var conflicts = window._conflictList || [];
+  conflicts.forEach(function(c, idx) {
+    var input = document.getElementById('conflictCn_' + idx);
+    if (input && input.value.trim()) {
+      c.newW.cn = input.value.trim();
+    }
+  });
 }
 
 function doImportWordsConfirm() {
