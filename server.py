@@ -1035,18 +1035,31 @@ def _import_extracted_roots(roots_list, mode='skip'):
     conn = get_db()
     imported, skipped = 0, 0
     for r in roots_list:
-        existing = conn.execute("SELECT id FROM roots WHERE en=? AND deleted=0", (r['en'],)).fetchone()
+        existing = conn.execute("SELECT id, src FROM roots WHERE en=? AND deleted=0", (r['en'],)).fetchone()
         if existing:
             if mode == 'merge':
+                # 追加来源（不重复）
+                old_src = existing['src'] or ''
+                new_src = r.get('src', '')
+                if new_src and new_src not in old_src.split('+'):
+                    merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
+                else:
+                    merged_src = old_src
                 conn.execute("UPDATE roots SET name=?,mean=?,src=?,cat=?,status=?,examples=? WHERE id=?",
-                    (r['name'], r['mean'], r['src'], r['cat'], r['status'],
+                    (r['name'], r['mean'], merged_src, r['cat'], r['status'],
                      json.dumps(r.get('examples', []), ensure_ascii=False), existing['id']))
                 imported += 1
             else:
+                # skip 模式也追加来源
+                old_src = existing['src'] or ''
+                new_src = r.get('src', '')
+                if new_src and new_src not in old_src.split('+'):
+                    merged_src = (old_src + '+' + new_src).strip('+') if old_src else new_src
+                    conn.execute("UPDATE roots SET src=? WHERE id=?", (merged_src, existing['id']))
                 skipped += 1
         else:
             conn.execute("INSERT INTO roots(name,en,mean,src,cat,status,examples) VALUES(?,?,?,?,?,?,?)",
-                (r['name'], r['en'], r['mean'], r['src'], r['cat'], r['status'],
+                (r['name'], r['en'], r['mean'], r.get('src',''), r['cat'], r['status'],
                  json.dumps(r.get('examples', []), ensure_ascii=False)))
             imported += 1
     conn.commit()
