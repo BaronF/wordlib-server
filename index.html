@@ -118,10 +118,11 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <option value="人员类">人员类</option>
         <option value="设备类">设备类</option>
       </select>
-      <input class="search-input" id="searchInput" placeholder="🔍 输入词条名称、英文名、词根或含义..." value="" oninput="document.getElementById('searchClearBtn').style.display=this.value?'block':'none'">
+      <input class="search-input" id="searchInput" placeholder="🔍 输入名称、英文名、词根或含义..." value="" oninput="document.getElementById('searchClearBtn').style.display=this.value?'block':'none'" onkeydown="if(event.key==='Enter')doSearch()">
       <span id="searchClearBtn" style="display:none;position:absolute;right:80px;top:50%;transform:translateY(-50%);cursor:pointer;color:var(--text3);font-size:16px;padding:4px;z-index:2;transition:color .2s" onclick="document.getElementById('searchInput').value='';this.style.display='none';doSearch()" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text3)'">✕</span>
       <button class="search-btn" onclick="doSearch()">搜索</button>
     </div>
+    <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);white-space:nowrap;margin-left:8px"><input type="checkbox" id="globalExactMatch" onchange="doSearch()" style="accent-color:var(--primary)"> 精确</label>
     <div class="hot-tags">
       <span style="color:var(--text3)">🔥 热门：</span>
       <span class="hot-tag" data-cat="" onclick="filterByCat('')">全部</span>
@@ -199,16 +200,6 @@ body{font-family:-apple-system,'PingFang SC','Microsoft YaHei','Helvetica Neue',
         <div id="rootsStat" style="font-size:12px;color:var(--text3);margin-top:4px">共收录 0 个词根</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        <input id="rootSearch" placeholder="搜索词根、含义..." style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);font-size:13px;outline:none;width:200px" oninput="renderRoots()">
-        <span style="cursor:pointer;font-size:16px;color:var(--text3);margin-left:-30px;z-index:1;position:relative" onclick="document.getElementById('rootSearch').value='';renderRoots()" title="清除">✕</span>
-        <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text2);white-space:nowrap"><input type="checkbox" id="rootExactMatch" onchange="renderRoots()" style="accent-color:var(--primary)"> 精确</label>
-        <select id="rootCatFilter" onchange="renderRoots()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg3);color:var(--text);font-size:13px;outline:none">
-          <option value="">全部分类</option>
-          <option value="时间">时间</option><option value="数量">数量</option><option value="标识">标识</option>
-          <option value="状态">状态</option><option value="操作">操作</option><option value="属性">属性</option>
-          <option value="位置">位置</option><option value="组织">组织</option><option value="设备">设备</option>
-          <option value="物料">物料</option><option value="质量">质量</option><option value="财务">财务</option>
-        </select>
         <button class="btn primary admin-only-root" style="padding:7px 18px;font-size:13px" onclick="showRootImportModal()">📥 导入词根</button>
         <button class="btn" style="padding:7px 18px;font-size:13px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)" onclick="exportAllRoots()">📤 导出词根</button>
         <span id="rootExportEntry"><button class="btn" style="padding:7px 18px;font-size:13px;background:var(--bg3);color:var(--text2);border:1px solid var(--border)" onclick="toggleRootExportMode(true)">☑️ 选择导出</button></span>
@@ -657,6 +648,7 @@ async function checkSession() {
 var words = [];
 var nextId = 1;
 var isAdmin = false;
+var currentTab = 'roots'; // 当前活跃的 Tab
 
 // ===== 词根数据 =====
 var roots = [];
@@ -838,9 +830,44 @@ function renderCards(list, keyword) {
 
 // ===== 搜索 =====
 function doSearch() {
+  var kw = document.getElementById('searchInput').value.trim();
+  var type = document.getElementById('searchType').value;
+  var exact = document.getElementById('globalExactMatch') && document.getElementById('globalExactMatch').checked;
+
+  // 同步高亮热门标签
+  document.querySelectorAll('.hot-tag').forEach(function(el) {
+    el.classList.toggle('on', el.getAttribute('data-cat') === type);
+  });
+
+  // 根据当前 Tab 搜索对应内容
+  if (currentTab === 'roots') {
+    // 搜索词根
+    var list = roots.filter(function(r) {
+      if (!isAdmin && r.status !== 'approved') return false;
+      if (r.deleted) return false;
+      if (type) {
+        // 分类筛选：词根的 cat 对应类型（去掉"类"字）
+        var rootCat = (r.cat || '') + '类';
+        if (rootCat !== type && r.cat !== type) return false;
+      }
+      if (kw) {
+        if (exact) {
+          if (r.name !== kw && r.en.toLowerCase() !== kw.toLowerCase()) return false;
+        } else {
+          var s = (r.name + r.en + r.mean + r.src + r.cat + (r.examples||[]).join('')).toLowerCase();
+          if (s.indexOf(kw.toLowerCase()) === -1) return false;
+        }
+      }
+      return true;
+    });
+    renderRoots(list);
+    return;
+  }
+
+  // 默认：搜索词条（list tab）
+  // 切换到词条页面
   document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('on'); });
   document.querySelector('.tab[data-t="list"]').classList.add('on');
-  // 同步高亮导航和目录树
   document.querySelectorAll('.nav-item').forEach(function(el) { el.classList.remove('on'); });
   var navList = document.querySelector('.nav-item[data-t="list"]');
   if (navList) navList.classList.add('on');
@@ -855,18 +882,18 @@ function doSearch() {
   if (pgAsset2) pgAsset2.style.display = 'none';
   var searchSec2 = document.querySelector('.search-section');
   if (searchSec2) searchSec2.style.display = '';
-  var type = document.getElementById('searchType').value;
-  // 同步高亮热门标签
-  document.querySelectorAll('.hot-tag').forEach(function(el) {
-    el.classList.toggle('on', el.getAttribute('data-cat') === type);
-  });
-  var kw = document.getElementById('searchInput').value.trim();
+  currentTab = 'list';
+
   var list = words.filter(function(w) {
     if (w.status !== 'approved') return false;
     if (type && w.cat !== type) return false;
     if (kw) {
-      var s = (w.cn + w.en + w.cat + w.roots + w.cnDesc + w.abbr).toLowerCase();
-      if (s.indexOf(kw.toLowerCase()) === -1) return false;
+      if (exact) {
+        if (w.cn !== kw && w.en.toLowerCase() !== kw.toLowerCase()) return false;
+      } else {
+        var s = (w.cn + w.en + w.cat + w.roots + w.cnDesc + w.abbr).toLowerCase();
+        if (s.indexOf(kw.toLowerCase()) === -1) return false;
+      }
     }
     return true;
   });
@@ -875,6 +902,7 @@ function doSearch() {
 
 // ===== Tab 切换 =====
 function switchTab(t) {
+  currentTab = t;
   if (t === 'list') { doSearch(); return; }
   // 安全地切换 tab 样式
   document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('on'); });
@@ -946,8 +974,8 @@ function filterByCat(cat) {
 
 // ===== 热门词根筛选（关联词条>=5的词根） =====
 function filterHotRoots() {
-  document.getElementById('rootSearch').value = '';
-  document.getElementById('rootCatFilter').value = '';
+  document.getElementById('searchInput').value = '';
+  document.getElementById('searchType').value = '';
   // 渲染时只显示热门词根
   var grid = document.getElementById('rootGrid');
   var empty = document.getElementById('rootEmpty');
@@ -2712,28 +2740,37 @@ function doRootImport() {
 }
 
 // ===== 渲染词根卡片 =====
-function renderRoots() {
+function renderRoots(filteredList) {
   var grid = document.getElementById('rootGrid');
   var empty = document.getElementById('rootEmpty');
   var stat = document.getElementById('rootsStat');
-  var kw = (document.getElementById('rootSearch').value || '').trim().toLowerCase();
-  var cat = document.getElementById('rootCatFilter').value;
-  var exact = document.getElementById('rootExactMatch') && document.getElementById('rootExactMatch').checked;
-  var list = roots.filter(function(r) {
-    // 非管理员只看已发布的词根
-    if (!isAdmin && r.status !== 'approved') return false;
-    if (r.deleted) return false;
-    if (cat && r.cat !== cat) return false;
-    if (kw) {
-      var s = (r.name + r.en + r.mean + r.src + r.cat + (r.examples||[]).join('')).toLowerCase();
-      if (exact) {
-        if (r.name !== kw && r.en.toLowerCase() !== kw) return false;
-      } else {
-        if (s.indexOf(kw) === -1) return false;
+  var list;
+  if (filteredList) {
+    // 使用外部传入的过滤列表（来自顶部搜索）
+    list = filteredList;
+  } else {
+    // 无参数时使用局部搜索（兼容旧逻辑）
+    var kw = (document.getElementById('searchInput').value || '').trim().toLowerCase();
+    var cat = document.getElementById('searchType').value;
+    var exact = document.getElementById('globalExactMatch') && document.getElementById('globalExactMatch').checked;
+    list = roots.filter(function(r) {
+      if (!isAdmin && r.status !== 'approved') return false;
+      if (r.deleted) return false;
+      if (cat) {
+        var rootCat = (r.cat || '') + '类';
+        if (rootCat !== cat && r.cat !== cat) return false;
       }
-    }
-    return true;
-  });
+      if (kw) {
+        if (exact) {
+          if (r.name !== kw && r.en.toLowerCase() !== kw) return false;
+        } else {
+          var s = (r.name + r.en + r.mean + r.src + r.cat + (r.examples||[]).join('')).toLowerCase();
+          if (s.indexOf(kw) === -1) return false;
+        }
+      }
+      return true;
+    });
+  }
   // 热门词根筛选
   if (window._hotRootFilter) {
     list = list.filter(function(r) {
