@@ -3402,7 +3402,16 @@ function renderExtractPreview() {
   document.getElementById('extractResult').style.display = 'block';
   var el = document.getElementById('extractPreviewList');
   if (!extractedRoots.length) { el.innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3)">未发现可剥离的词根</div>'; return; }
+
+  // 构建已有词根库索引（用于对比）
+  var existByEn = {}, existByName = {};
+  roots.forEach(function(r) {
+    if (r.en) existByEn[r.en.toLowerCase()] = r;
+    if (r.name) existByName[r.name] = r;
+  });
+
   var html = '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="border-bottom:2px solid var(--border)">' +
+    '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">状态</th>' +
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">名称</th>' +
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">英文</th>' +
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">分类</th>' +
@@ -3410,29 +3419,62 @@ function renderExtractPreview() {
     '<th style="text-align:left;padding:8px;color:var(--text3);font-size:11px">示例</th>' +
     '<th style="text-align:center;padding:8px;color:var(--text3);font-size:11px">操作</th>' +
     '</tr></thead><tbody>';
+  var newCount = 0, existCount = 0, conflictCount = 0;
   extractedRoots.forEach(function(r, idx) {
     var isDup = r.duplicate;
-    var rowStyle = isDup ? 'border-bottom:1px solid var(--border);background:rgba(239,68,68,.08)' : 'border-bottom:1px solid var(--border)';
-    var nameColor = isDup ? '#ef4444' : 'var(--primary)';
+    // 对比已有词根库
+    var existR = existByEn[r.en.toLowerCase()];
+    var existByN = existByName[r.name];
+    var status = 'new'; // new / exist / conflict
+    var statusHtml = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(100,100,255,.1);color:#6366f1;font-weight:600">新增</span>';
+    var conflictDetail = '';
+    if (existR && existR.name === r.name) {
+      status = 'exist'; existCount++;
+      statusHtml = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(34,197,94,.1);color:#22c55e;font-weight:600">已存在</span>';
+    } else if (existR && existR.name !== r.name) {
+      status = 'conflict'; conflictCount++;
+      statusHtml = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(245,158,11,.1);color:#f59e0b;font-weight:600">冲突</span>';
+      conflictDetail = '<div style="font-size:10px;color:#f59e0b;margin-top:2px">库中: ' + existR.name + '</div>';
+    } else if (existByN && existByN.en.toLowerCase() !== r.en.toLowerCase()) {
+      status = 'conflict'; conflictCount++;
+      statusHtml = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:rgba(245,158,11,.1);color:#f59e0b;font-weight:600">冲突</span>';
+      conflictDetail = '<div style="font-size:10px;color:#f59e0b;margin-top:2px">库中: ' + existByN.en + '</div>';
+    } else { newCount++; }
+
+    var rowStyle = status === 'exist' ? 'border-bottom:1px solid var(--border);background:rgba(34,197,94,.04)' :
+                   status === 'conflict' ? 'border-bottom:1px solid var(--border);background:rgba(245,158,11,.06)' :
+                   isDup ? 'border-bottom:1px solid var(--border);background:rgba(239,68,68,.08)' :
+                   'border-bottom:1px solid var(--border)';
+    var nameColor = isDup ? '#ef4444' : status === 'exist' ? '#22c55e' : 'var(--primary)';
     var dupTag = isDup ? ' <span style="font-size:10px;color:#ef4444;font-weight:400">⚠重复</span>' : '';
     var actionHtml = '';
-    if (isDup) {
+    if (status === 'conflict' || isDup) {
       actionHtml = '<div style="display:flex;gap:6px;justify-content:center">' +
         '<span style="cursor:pointer;color:var(--primary);font-size:12px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;white-space:nowrap" onclick="editExtractedRoot('+idx+')" onmouseover="this.style.borderColor=\'var(--primary)\'" onmouseout="this.style.borderColor=\'var(--border)\'">✏️ 编辑</span>' +
         '<span style="cursor:pointer;color:#ef4444;font-size:12px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;white-space:nowrap" onclick="removeExtractedRoot('+idx+')" onmouseover="this.style.borderColor=\'#ef4444\'" onmouseout="this.style.borderColor=\'var(--border)\'">✕ 删除</span>' +
       '</div>';
+    } else if (status === 'new') {
+      actionHtml = '<span style="cursor:pointer;color:#ef4444;font-size:12px;padding:2px 8px;border:1px solid var(--border);border-radius:4px;white-space:nowrap" onclick="removeExtractedRoot('+idx+')" onmouseover="this.style.borderColor=\'#ef4444\'" onmouseout="this.style.borderColor=\'var(--border)\'">✕ 删除</span>';
     }
     html += '<tr style="' + rowStyle + '">' +
-      '<td style="padding:8px;font-weight:600;color:' + nameColor + '">' + (r.name || '-') + dupTag + '</td>' +
+      '<td style="padding:8px">' + statusHtml + '</td>' +
+      '<td style="padding:8px;font-weight:600;color:' + nameColor + '">' + (r.name || '-') + dupTag + conflictDetail + '</td>' +
       '<td style="padding:8px;font-family:monospace;color:var(--text2)">' + (r.en || '-') + '</td>' +
       '<td style="padding:8px"><span class="rcard-tag cat" style="white-space:nowrap">' + (r.cat || '-') + '</span></td>' +
       '<td style="padding:8px;text-align:center;font-weight:600;color:var(--text)">' + (r.count || 0) + '</td>' +
-      '<td style="padding:8px;font-size:12px;color:var(--text3)">' + (r.examples ? r.examples.slice(0, 3).join('、') : '-') + '</td>' +
+      '<td style="padding:8px;font-size:12px;color:var(--text3)">' + (r.examples ? r.examples.slice(0, 3).join(', ') : '-') + '</td>' +
       '<td style="padding:8px">' + actionHtml + '</td>' +
     '</tr>';
   });
   html += '</tbody></table>';
-  el.innerHTML = html;
+  // 统计摘要
+  var summary = '<div style="margin-bottom:12px;font-size:12px;color:var(--text2);display:flex;gap:16px">' +
+    '<span>共 ' + extractedRoots.length + ' 个词根</span>' +
+    '<span style="color:#6366f1">🆕 新增 ' + newCount + '</span>' +
+    '<span style="color:#22c55e">✅ 已存在 ' + existCount + '</span>' +
+    (conflictCount > 0 ? '<span style="color:#f59e0b">⚠️ 冲突 ' + conflictCount + '</span>' : '') +
+  '</div>';
+  el.innerHTML = summary + html;
 }
 
 function removeExtractedRoot(idx) {
