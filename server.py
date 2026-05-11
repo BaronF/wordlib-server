@@ -653,21 +653,21 @@ def _classify_root(root):
 
 # ========== 词根剥离与导入函数（任务 7.1） ==========
 
-def _extract_roots_from_xlsx(filepath):
+def _extract_roots_from_xlsx(filepath, original_fname=''):
     """从 xlsx/docx 文件动态剥离词根
     智能识别所有包含英文字段名的列，按 _ 拆分词根，反向查找中文名
     """
     from collections import Counter
     fname = os.path.basename(filepath).lower()
-    # 从文件名提取来源标签
+    # 从原始文件名提取来源标签
     import re as _re_src
-    orig_fname = os.path.basename(filepath)
     src_label = '数据资产'
-    # 匹配 "华新细部设计-XXX.xlsx" 格式
-    m = _re_src.search(r'[_\-]([\u4e00-\u9fff]+?)(?:L\d|[（(]|\.|$)', orig_fname)
+    use_fname = original_fname or os.path.basename(filepath)
+    # 匹配 "数据库设计_品质L3" → 品质
+    m = _re_src.search(r'[_\-]([\u4e00-\u9fff]+?)(?:L\d|[（(]|\.|分册|$)', use_fname)
     if m: src_label = m.group(1)
-    # 匹配 "华新细部设计-XXX.xlsx" 格式
-    m2 = _re_src.search(r'设计[_\-]([\u4e00-\u9fff]+)', orig_fname)
+    # 匹配 "华新细部设计-营销.xlsx" → 营销
+    m2 = _re_src.search(r'[_\-]([\u4e00-\u9fff]{2,4})\.(xlsx|docx)$', use_fname, _re_src.IGNORECASE)
     if m2: src_label = m2.group(1)
 
     # 收集所有英文-中文字段对
@@ -1774,6 +1774,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, [row_to_dict(r) for r in rows])
             return
 
+        # === 更新剥离历史（编辑/删除后保存） ===
+        if path == '/api/extract_history/update':
+            hid = data.get('id', 0)
+            roots_data = data.get('roots', [])
+            words_data = data.get('words', [])
+            if hid:
+                conn = get_db()
+                conn.execute("UPDATE extract_history SET root_count=?, field_count=?, result_json=? WHERE id=?",
+                    (len(roots_data), len(words_data), json.dumps({'roots': roots_data, 'words': words_data}, ensure_ascii=False), hid))
+                conn.commit()
+                conn.close()
+            self._send_json(200, {'msg': 'ok'})
+            return
+
         # === 导出剥离结果为 xlsx ===
         if path == '/api/extract_roots/export':
             roots_list = data.get('roots', [])
@@ -2186,7 +2200,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         tmp.close()
 
         try:
-            results, word_list = _extract_roots_from_xlsx(tmp.name)
+            results, word_list = _extract_roots_from_xlsx(tmp.name, fname)
             self._log_op('词根剥离', f'{fname} → 剥离出 {len(results)} 个词根, {len(word_list)} 个词条')
             # 保存剥离历史
             try:

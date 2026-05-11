@@ -3331,6 +3331,17 @@ function showVersionDiff(vid) {
 // ========== 词根剥离模块 ==========
 var extractedRoots = [];
 var extractedWords = [];
+var currentExtractHistoryId = null;
+
+// 保存编辑/删除后的剥离结果到后端历史
+function saveExtractHistory() {
+  if (!currentExtractHistoryId) return;
+  apiCall('POST', '/api/extract_history/update', {
+    id: currentExtractHistoryId,
+    roots: extractedRoots,
+    words: extractedWords
+  }, function() {});
+}
 
 function loadExtractHistory() {
   authFetch('/api/extract_history').then(function(r) { return r.json(); }).then(function(data) {
@@ -3366,6 +3377,7 @@ function loadExtractHistoryDetail(id) {
     if (roots.length) {
       extractedRoots = roots;
       extractedWords = words;
+      currentExtractHistoryId = id;
       renderExtractPreview();
       document.getElementById('extractResult').style.display = 'block';
       showToast('已加载历史记录：' + (data.filename || '') + '，' + roots.length + ' 个词根, ' + words.length + ' 个词条', 'var(--primary)');
@@ -3390,6 +3402,10 @@ function doExtractRoots(input) {
       if (data.error) { showToast('剥离失败：' + data.error, '#ef4444'); return; }
       extractedRoots = data.roots || data || [];
       extractedWords = data.words || [];
+      // 获取最新历史记录ID（用于后续编辑保存）
+      authFetch('/api/extract_history').then(function(r){return r.json()}).then(function(list){
+        if(list && list.length) currentExtractHistoryId = list[0].id;
+      }).catch(function(){});
       renderExtractPreview();
     })
     .catch(function(e) {
@@ -3485,6 +3501,7 @@ function removeExtractedRoot(idx) {
   extractedRoots.forEach(function(r) { cnCount[r.name] = (cnCount[r.name]||0) + 1; });
   extractedRoots.forEach(function(r) { r.duplicate = cnCount[r.name] > 1; });
   renderExtractPreview();
+  saveExtractHistory();
   showToast('已移除词根「' + r.name + '(' + r.en + ')」', '#ef4444');
 }
 
@@ -3526,6 +3543,7 @@ function saveEditedRoot(idx) {
   extractedRoots.forEach(function(r) { cnCount[r.name] = (cnCount[r.name]||0) + 1; });
   extractedRoots.forEach(function(r) { r.duplicate = cnCount[r.name] > 1; });
   renderExtractPreview();
+  saveExtractHistory();
   showToast('词根「' + r.en + '」已更新', '#22c55e');
 }
 
@@ -3559,21 +3577,63 @@ function doImportExtractedWords() {
   extractedRoots.forEach(function(r) { remainingRootEns[r.en] = true; });
   var filteredWords = extractedWords.filter(function(w) {
     var parts = w.en.toLowerCase().split('_');
-    // 词条中至少有一个词根片段在剩余词根中
     for (var i = 0; i < parts.length; i++) {
       if (remainingRootEns[parts[i]]) return true;
     }
     return false;
   });
   if (!filteredWords.length) { showToast('没有与当前词根关联的词条可导入', '#ef4444'); return; }
-  if (!confirm('确定要导入 ' + filteredWords.length + ' 个词条到词条共创吗？（已过滤掉被删除词根关联的词条）')) return;
+
+  // 对比已有词条库，显示冲突情况
+  var existByEn = {};
+  words.forEach(function(w) { if (w.en) existByEn[w.en.toLowerCase()] = w; });
+  var newList = [], existList = [], conflictList = [];
+  filteredWords.forEach(function(w) {
+    var exist = existByEn[w.en.toLowerCase()];
+    if (!exist) { newList.push(w); }
+    else if (exist.cn === w.cn) { existList.push(w); }
+    else { conflictList.push({ newW: w, oldW: exist }); }
+  });
+
+  // 弹窗显示冲突情况
+  var overlay = document.createElement('div');
+  overlay.id = 'wordImportPreview';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:10001;display:grid;place-items:center;backdrop-filter:blur(4px)';
+  var html = '<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:650px;width:90%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><div style="font-size:17px;font-weight:700;color:var(--text)">📚 词条导入预览</div><span style="cursor:pointer;font-size:20px;color:var(--text3)" onclick="document.getElementById(\'wordImportPreview\').remove()">✕</span></div>' +
+    '<div style="display:flex;gap:16px;margin-bottom:16px;font-size:13px">' +
+      '<span style="color:#6366f1">🆕 新增 ' + newList.length + '</span>' +
+      '<span style="color:#22c55e">✅ 已存在 ' + existList.length + '</span>' +
+      (conflictList.length ? '<span style="color:#f59e0b">⚠️ 冲突 ' + conflictList.length + '</span>' : '') +
+    '</div>';
+  if (conflictList.length) {
+    html += '<div style="margin-bottom:12px;padding:10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;font-size:12px;max-height:200px;overflow-y:auto">';
+    conflictList.slice(0, 20).forEach(function(c) {
+      html += '<div style="padding:4px 0;border-bottom:1px solid rgba(245,158,11,.1)"><code>' + c.newW.en + '</code> 新: <b>' + c.newW.cn + '</b> ← 库中: <span style="color:var(--text3)">' + c.oldW.cn + '</span></div>';
+    });
+    if (conflictList.length > 20) html += '<div style="color:var(--text3)">...共 ' + conflictList.length + ' 个冲突</div>';
+    html += '</div>';
+  }
+  html += '<div style="font-size:12px;color:var(--text3);margin-bottom:16px">将导入 <b>' + newList.length + '</b> 个新词条（已存在和冲突的跳过）</div>' +
+    '<div style="display:flex;gap:10px;justify-content:flex-end">' +
+      '<button class="btn ghost" onclick="document.getElementById(\'wordImportPreview\').remove()">取消</button>' +
+      '<button class="btn primary" onclick="document.getElementById(\'wordImportPreview\').remove();doImportWordsConfirm()">确认导入新增词条</button>' +
+    '</div></div>';
+  overlay.innerHTML = html;
+  document.body.appendChild(overlay);
+  // 保存待导入列表
+  window._pendingImportWords = newList;
+}
+
+function doImportWordsConfirm() {
+  var filteredWords = window._pendingImportWords || [];
+  if (!filteredWords.length) { showToast('没有新词条可导入', '#ef4444'); return; }
   showToast('正在导入 ' + filteredWords.length + ' 个词条...', 'var(--primary)');
   apiCall('POST', '/api/init_words', filteredWords, function(resp) {
     if (resp && resp.count !== undefined) {
       showToast('成功导入 ' + resp.count + ' 个词条（草稿状态）', '#22c55e');
       loadFromStorage();
       updatePendingBadge();
-      // 弹窗提示去审核
       if (confirm('导入成功！' + resp.count + ' 个词条已进入草稿状态。\n是否前往审核中心审核发布？')) {
         switchTab('audit');
         switchAuditTab('word');
