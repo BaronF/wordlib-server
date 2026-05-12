@@ -238,7 +238,7 @@ def _ensure_pg_schema(raw_conn, conn):
             issue_count INTEGER DEFAULT 0,
             change_count INTEGER DEFAULT 0,
             result_json TEXT DEFAULT '',
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -249,7 +249,7 @@ def _ensure_pg_schema(raw_conn, conn):
             snapshot TEXT NOT NULL,
             op_type TEXT NOT NULL,
             operator TEXT DEFAULT 'system',
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -259,7 +259,7 @@ def _ensure_pg_schema(raw_conn, conn):
             row_num INTEGER,
             reason TEXT,
             raw_data TEXT,
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -268,7 +268,7 @@ def _ensure_pg_schema(raw_conn, conn):
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'user',
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -276,8 +276,8 @@ def _ensure_pg_schema(raw_conn, conn):
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             token TEXT UNIQUE NOT NULL,
-            last_active TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS'),
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            last_active TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS'),
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -285,7 +285,7 @@ def _ensure_pg_schema(raw_conn, conn):
             id SERIAL PRIMARY KEY,
             word TEXT NOT NULL,
             standard TEXT NOT NULL,
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     conn.execute("""
@@ -295,7 +295,7 @@ def _ensure_pg_schema(raw_conn, conn):
             root_count INTEGER DEFAULT 0,
             field_count INTEGER DEFAULT 0,
             result_json TEXT DEFAULT '',
-            time TEXT DEFAULT TO_CHAR(NOW(), 'YYYY-MM-DD HH24:MI:SS')
+            time TEXT DEFAULT TO_CHAR(NOW() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS')
         )
     """)
     # PostgreSQL 自动迁移：给已有 words 表加新字段（用小写列名）
