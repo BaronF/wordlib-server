@@ -336,6 +336,12 @@ function extractFromElementsSync(elements, fname) {
         } else {
           curTblEn = parsedEn;
           curTblCn = parsedCn;
+          // DB定义中发现的新表，补充到 L4 列表
+          if (parsedEn && !tblMap[parsedEn.toLowerCase()]) {
+            l4.push({l1:l1, mod:mod, en:parsedEn, cn:parsedCn, pk:'', fk:'', source_hint:'DB定义'});
+            tblMap[parsedEn.toLowerCase()] = parsedCn;
+            l4List.push({en:parsedEn, cn:parsedCn, mod:mod, used:true});
+          }
         }
         defTblIdx++;
         inDef = true;
@@ -348,7 +354,15 @@ function extractFromElementsSync(elements, fname) {
         var parsedEn = cnEnMatch[2].trim();
         var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
         if (l4Match) { curTblEn = l4Match.en; curTblCn = l4Match.cn; l4Match.used = true; }
-        else { curTblEn = parsedEn; curTblCn = parsedCn; }
+        else {
+          curTblEn = parsedEn; curTblCn = parsedCn;
+          // DB定义中发现的新表，补充到 L4 列表
+          if (parsedEn && !tblMap[parsedEn.toLowerCase()]) {
+            l4.push({l1:l1, mod:mod, en:parsedEn, cn:parsedCn, pk:'', fk:'', source_hint:'DB定义'});
+            tblMap[parsedEn.toLowerCase()] = parsedCn;
+            l4List.push({en:parsedEn, cn:parsedCn, mod:mod, used:true});
+          }
+        }
         defTblIdx++;
         inDef = true;
         continue;
@@ -360,7 +374,15 @@ function extractFromElementsSync(elements, fname) {
         var parsedEn = cnBracketMatch[2].trim();
         var l4Match = fuzzyMatchL4(parsedEn, parsedCn);
         if (l4Match) { curTblEn = l4Match.en; curTblCn = l4Match.cn; l4Match.used = true; }
-        else { curTblEn = parsedEn; curTblCn = parsedCn; }
+        else {
+          curTblEn = parsedEn; curTblCn = parsedCn;
+          // DB定义中发现的新表，补充到 L4 列表
+          if (parsedEn && !tblMap[parsedEn.toLowerCase()]) {
+            l4.push({l1:l1, mod:mod, en:parsedEn, cn:parsedCn, pk:'', fk:'', source_hint:'DB定义'});
+            tblMap[parsedEn.toLowerCase()] = parsedCn;
+            l4List.push({en:parsedEn, cn:parsedCn, mod:mod, used:true});
+          }
+        }
         defTblIdx++;
         inDef = true;
         continue;
@@ -383,6 +405,12 @@ function extractFromElementsSync(elements, fname) {
         } else {
           curTblEn = parsedEn;
           curTblCn = tblMap[parsedEn.toLowerCase()] || '';
+          // DB定义中发现的新表，补充到 L4 列表
+          if (parsedEn && !tblMap[parsedEn.toLowerCase()]) {
+            l4.push({l1:l1, mod:mod, en:parsedEn, cn:'', pk:'', fk:'', source_hint:'DB定义'});
+            tblMap[parsedEn.toLowerCase()] = '';
+            l4List.push({en:parsedEn, cn:'', mod:mod, used:true});
+          }
         }
         defTblIdx++;
         continue;
