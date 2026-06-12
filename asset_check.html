@@ -285,7 +285,8 @@ function extractFromElementsSync(elements, fname) {
             l4.push({l1:l1,mod:rowMod||mod,en:row[1],cn:row[2],pk:row[4]||'',fk:row[5]||''});
           }
         }
-        inList=false;
+        // 不再在此处 inList=false，因为 DB清单可能跨页分为多个表格
+        // 退出条件由段落 'DB定义'/'ER图'/'数据字典' 控制
       }
     }
   }
